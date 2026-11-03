@@ -11,7 +11,7 @@ import {
   MediaStatus,
   MediaType,
 } from '@server/constants/media';
-import { getRepository } from '@server/datasource';
+import datasource, { getRepository } from '@server/datasource';
 import Media from '@server/entity/Media';
 import { MediaRequest } from '@server/entity/MediaRequest';
 import OverrideRule from '@server/entity/OverrideRule';
@@ -1626,5 +1626,209 @@ describe('DELETE /request/:requestId, orphaned season status reset', () => {
     const updated = await mediaRepo.findOneOrFail({ where: { id: media.id } });
     assert.strictEqual(updated.seasons[0].status, MediaStatus.UNKNOWN);
     assert.strictEqual(updated.seasons[0].status4k, MediaStatus.PROCESSING);
+  });
+});
+
+describe('per-owner library fan-out', () => {
+  it('isolates a self-service intent by owner and toggles removal', async () => {
+    const demo = await loginAs('demo@seerr.dev', 'test1234');
+    const admin = await loginAs('admin@seerr.dev', 'test1234');
+    const body = { mediaType: 'movie', tmdbId: 987654 };
+    const added = await demo.post('/request/fanout').send(body);
+    assert.strictEqual(added.status, 200);
+    assert.strictEqual(added.body.status, 'pending');
+    assert.ok(added.body.requestId < 0);
+    const other = await admin.get(
+      '/request/fanout/status?mediaType=movie&tmdbId=987654'
+    );
+    assert.strictEqual(other.body.status, 'missing');
+    const rows = await datasource.query(
+      'select * from media_fanout_intent where owner = ?',
+      [added.body.owner]
+    );
+    assert.strictEqual(rows.length, 1);
+    assert.strictEqual(rows[0].source, 'seerr-ui');
+    await datasource.query(
+      'update media_fanout_intent set status = ? where id = ?',
+      ['fulfilled', rows[0].id]
+    );
+    const removed = await demo.post('/request/fanout').send(body);
+    assert.strictEqual(removed.body.status, 'remove_pending');
+    const cancelled = await demo.post('/request/fanout').send(body);
+    assert.strictEqual(cancelled.body.status, 'fulfilled');
+  });
+
+  it('rejects another owner for a regular user and lists statuses for a manager', async () => {
+    const demo = await loginAs('demo@seerr.dev', 'test1234');
+    const admin = await loginAs('admin@seerr.dev', 'test1234');
+    const target = (await admin.get('/request/fanout/owners')).body.owners.find(
+      (u: { owner: string }) => u.owner === 'admin'
+    );
+    assert.ok(target);
+    assert.strictEqual(
+      (
+        await demo
+          .post('/request/fanout')
+          .send({ mediaType: 'movie', tmdbId: 87234, owner: target.owner })
+      ).status,
+      403
+    );
+    assert.strictEqual((await demo.get('/request/fanout/owners')).status, 403);
+    assert.strictEqual(
+      (
+        await admin
+          .post('/request/fanout')
+          .send({ mediaType: 'movie', tmdbId: 87234, owner: target.owner })
+      ).status,
+      200
+    );
+    const listed = await admin.get(
+      '/request/fanout/owners?mediaType=movie&tmdbId=87234'
+    );
+    assert.strictEqual(
+      listed.body.owners.find(
+        (u: { owner: string }) => u.owner === target.owner
+      ).status,
+      'pending'
+    );
+    assert.strictEqual(
+      (
+        await demo.get(
+          '/request/fanout/status?mediaType=movie&tmdbId=87234&owner=' +
+            target.owner
+        )
+      ).status,
+      403
+    );
+  });
+
+  it('uses the selected requester destination when posting a movie request', async (t) => {
+    t.mock.method(
+      MediaRequestSubscriber.prototype,
+      'sendToRadarr',
+      async () => undefined
+    );
+    configureRadarr([
+      { id: 1, isDefault: true },
+      { id: 42, isDefault: false },
+    ]);
+    getSettings().sonarr = [];
+    const user = await getRepository(User).findOneOrFail({
+      where: { email: 'demo@seerr.dev' },
+    });
+    await getRepository(OverrideRule).save(
+      new OverrideRule({
+        radarrServiceId: 42,
+        users: String(user.id),
+        profileId: 7,
+        rootFolder: '/demo-library',
+        tags: '3,5',
+      })
+    );
+    const admin = await loginAs('admin@seerr.dev', 'test1234');
+    const response = await admin.post('/request').send({
+      mediaType: 'movie',
+      mediaId: 998801,
+      userId: user.id,
+      serverId: 1,
+      rootFolder: '/wrong',
+      tags: [99],
+    });
+    assert.strictEqual(response.status, 201, JSON.stringify(response.body));
+    assert.strictEqual(response.body.serverId, 42);
+    assert.strictEqual(response.body.profileId, 7);
+    assert.strictEqual(response.body.rootFolder, '/demo-library');
+    assert.deepStrictEqual(response.body.tags, [3, 5]);
+    assert.strictEqual(response.body.requestedBy.id, user.id);
+  });
+
+  it('uses the offset keyspace for known titles and reads a legacy request-backed intent', async () => {
+    const media = await getRepository(Media).save(
+      new Media({
+        mediaType: MediaType.MOVIE,
+        tmdbId: 87777,
+        status: MediaStatus.AVAILABLE,
+        status4k: MediaStatus.UNKNOWN,
+      })
+    );
+    const demo = await loginAs('demo@seerr.dev', 'test1234');
+    const added = await demo
+      .post('/request/fanout')
+      .send({ mediaType: 'movie', tmdbId: media.tmdbId });
+    assert.strictEqual(added.status, 200);
+    assert.strictEqual(added.body.requestId, 100000000 + media.id);
+    await datasource.query(
+      'update media_fanout_intent set status = ? where requestId = ?',
+      ['fulfilled', added.body.requestId]
+    );
+    const status = await demo.get(
+      `/request/fanout/status?mediaType=movie&tmdbId=${media.tmdbId}`
+    );
+    assert.strictEqual(status.body.status, 'fulfilled');
+    assert.strictEqual(status.body.globallyAvailable, true);
+    assert.strictEqual(status.body.removable, true);
+  });
+
+  it('updates an existing request-backed row instead of duplicating it', async () => {
+    const demo = await loginAs('demo@seerr.dev', 'test1234');
+    const owner = (
+      await demo.get('/request/fanout/status?mediaType=tv&tvdbId=765432')
+    ).body.owner;
+    await datasource.query(
+      `insert into media_fanout_intent
+      (requestId, mediaType, app, tvdbId, owner, source, status)
+      values(?, ?, ?, ?, ?, ?, ?)`,
+      [1234, 'tv', 'sonarr', 765432, owner, 'request', 'fulfilled']
+    );
+    const removal = await demo
+      .post('/request/fanout')
+      .send({ mediaType: 'tv', tvdbId: 765432 });
+    assert.strictEqual(removal.status, 200);
+    assert.strictEqual(removal.body.status, 'remove_pending');
+    assert.strictEqual(
+      (
+        await datasource.query(
+          'select id from media_fanout_intent where owner = ?',
+          [owner]
+        )
+      ).length,
+      1
+    );
+  });
+
+  it('resolves the selected requester plain movie override without exposing it to regular users', async () => {
+    const admin = await loginAs('admin@seerr.dev', 'test1234');
+    const demo = await loginAs('demo@seerr.dev', 'test1234');
+    const user = await getRepository(User).findOneOrFail({
+      where: { email: 'demo@seerr.dev' },
+    });
+    await getRepository(OverrideRule).save(
+      new OverrideRule({
+        radarrServiceId: 42,
+        users: String(user.id),
+        profileId: 7,
+        rootFolder: '/demo',
+        tags: '3, 5',
+      })
+    );
+    const mapped = await admin.get(
+      '/request/destination?mediaType=movie&userId=' + user.id
+    );
+    assert.strictEqual(mapped.status, 200);
+    assert.deepStrictEqual(mapped.body, {
+      serverId: 42,
+      profileId: 7,
+      rootFolder: '/demo',
+      tags: [3, 5],
+    });
+    assert.strictEqual(
+      (await demo.get('/request/destination?mediaType=movie&userId=' + user.id))
+        .status,
+      403
+    );
+    assert.strictEqual(
+      (await admin.get('/request/destination?mediaType=movie&userId=0')).status,
+      400
+    );
   });
 });

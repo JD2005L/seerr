@@ -21,6 +21,17 @@ import type {
   MediaRequestBody,
   RequestResultsResponse,
 } from '@server/interfaces/api/requestInterfaces';
+import {
+  FanoutError,
+  applyDestination,
+  canManageFanout,
+  destinationFor,
+  fanoutOwners,
+  fanoutStatus,
+  parseMediaId,
+  parseMediaType,
+  toggleFanout,
+} from '@server/lib/fanout';
 import { Permission } from '@server/lib/permissions';
 import { getSettings } from '@server/lib/settings';
 import logger from '@server/logger';
@@ -34,6 +45,89 @@ import requestLock, {
 import { Router } from 'express';
 
 const requestRoutes = Router();
+
+const fanoutFailure = (
+  error: unknown,
+  next: (error: { status: number; message: string }) => void
+) => {
+  const failure =
+    error instanceof FanoutError
+      ? error
+      : new FanoutError(500, 'Unable to process fan-out request.');
+  next({ status: failure.status, message: failure.message });
+};
+
+requestRoutes.get('/destination', async (req, res, next) => {
+  try {
+    if (!canManageFanout(req.user))
+      throw new FanoutError(
+        403,
+        'You do not have permission to select another request destination.'
+      );
+    const destination = await destinationFor(
+      Number(req.query.userId),
+      parseMediaType(req.query.mediaType)
+    );
+    if (!destination)
+      throw new FanoutError(
+        404,
+        'No destination mapping exists for that user and media type.'
+      );
+    return res.json(destination);
+  } catch (error) {
+    fanoutFailure(error, next);
+  }
+});
+
+requestRoutes.get('/fanout/owners', async (req, res, next) => {
+  try {
+    const type = req.query.mediaType
+      ? parseMediaType(req.query.mediaType)
+      : undefined;
+    return res.json({
+      owners: await fanoutOwners(
+        req.user,
+        type,
+        parseMediaId(req.query.tmdbId),
+        parseMediaId(req.query.tvdbId)
+      ),
+    });
+  } catch (error) {
+    fanoutFailure(error, next);
+  }
+});
+
+requestRoutes.get('/fanout/status', async (req, res, next) => {
+  try {
+    return res.json(
+      await fanoutStatus(
+        req.user,
+        req.query.owner as string | undefined,
+        parseMediaType(req.query.mediaType),
+        parseMediaId(req.query.tmdbId),
+        parseMediaId(req.query.tvdbId)
+      )
+    );
+  } catch (error) {
+    fanoutFailure(error, next);
+  }
+});
+
+requestRoutes.post('/fanout', async (req, res, next) => {
+  try {
+    return res.json(
+      await toggleFanout(
+        req.user,
+        req.body.owner,
+        parseMediaType(req.body.mediaType),
+        parseMediaId(req.body.tmdbId),
+        parseMediaId(req.body.tvdbId)
+      )
+    );
+  } catch (error) {
+    fanoutFailure(error, next);
+  }
+});
 
 requestRoutes.get<Record<string, unknown>, RequestResultsResponse>(
   '/',
@@ -316,7 +410,10 @@ requestRoutes.post<never, MediaRequest, MediaRequestBody>(
           message: 'You must be logged in to request media.',
         });
       }
-      const request = await MediaRequest.request(req.body, req.user);
+      const request = await MediaRequest.request(
+        await applyDestination(req.body),
+        req.user
+      );
 
       return res.status(201).json(request);
     } catch (error) {

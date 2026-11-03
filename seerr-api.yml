@@ -6625,6 +6625,94 @@ paths:
             application/json:
               schema:
                 $ref: '#/components/schemas/MediaRequest'
+  /request/destination:
+    get:
+      summary: Resolve Arr destination for a selected Request As user
+      tags: [request]
+      parameters:
+        - in: query
+          name: userId
+          required: true
+          schema: { type: integer }
+        - in: query
+          name: mediaType
+          required: true
+          schema: { type: string, enum: [movie, tv] }
+      security:
+        - cookieAuth: []
+        - apiKey: []
+      responses:
+        '200': { description: Resolved destination }
+        '400': { description: Invalid input }
+        '403': { description: Permission denied }
+        '404': { description: No mapping }
+  /request/fanout/owners:
+    get:
+      summary: List library owners with optional title status
+      tags: [request]
+      parameters:
+        - in: query
+          name: mediaType
+          schema: { type: string, enum: [movie, tv] }
+        - in: query
+          name: tmdbId
+          schema: { type: integer }
+        - in: query
+          name: tvdbId
+          schema: { type: integer }
+      security:
+        - cookieAuth: []
+        - apiKey: []
+      responses:
+        '200': { description: Fan-out owners }
+        '403': { description: Permission denied }
+  /request/fanout/status:
+    get:
+      summary: Get an owner library status for a title
+      tags: [request]
+      parameters:
+        - in: query
+          name: mediaType
+          required: true
+          schema: { type: string, enum: [movie, tv] }
+        - in: query
+          name: tmdbId
+          schema: { type: integer }
+        - in: query
+          name: tvdbId
+          schema: { type: integer }
+        - in: query
+          name: owner
+          schema: { type: string }
+      security:
+        - cookieAuth: []
+        - apiKey: []
+      responses:
+        '200': { description: Library status }
+        '403': { description: Permission denied }
+  /request/fanout:
+    post:
+      summary: Toggle add or remove intent for an owner library
+      tags: [request]
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              type: object
+              required: [mediaType]
+              properties:
+                mediaType: { type: string, enum: [movie, tv] }
+                tmdbId: { type: integer }
+                tvdbId: { type: integer }
+                owner: { type: string }
+      security:
+        - cookieAuth: []
+        - apiKey: []
+      responses:
+        '200': { description: Intent toggled }
+        '400': { description: Invalid input }
+        '403': { description: Permission denied }
   /request/count:
     get:
       summary: Gets request counts

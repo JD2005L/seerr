@@ -14,9 +14,10 @@ import { MediaRequestStatus, MediaStatus } from '@server/constants/media';
 import type Media from '@server/entity/Media';
 import type { MediaRequest } from '@server/entity/MediaRequest';
 import axios from 'axios';
-import { useMemo, useState } from 'react';
+import { useEffect, useMemo, useState } from 'react';
 import { useIntl } from 'react-intl';
 import { mutate } from 'swr';
+import { fanoutLabel, ownerOptions, type FanoutOwner } from './fanoutOptions';
 
 const messages = defineMessages('components.RequestButton', {
   viewrequest: 'View Request',
@@ -67,6 +68,75 @@ const RequestButton = ({
   const [showRequestModal, setShowRequestModal] = useState(false);
   const [showRequest4kModal, setShowRequest4kModal] = useState(false);
   const [editRequest, setEditRequest] = useState(false);
+  const [fanoutStatus, setFanoutStatus] = useState('missing');
+  const [fanoutOwners, setFanoutOwners] = useState<FanoutOwner[]>([]);
+  const [fanoutBusy, setFanoutBusy] = useState(false);
+  const isAvailable = media?.status === MediaStatus.AVAILABLE;
+  const canManageOwners = hasPermission(
+    [Permission.ADMIN, Permission.MANAGE_USERS, Permission.MANAGE_REQUESTS],
+    { type: 'or' }
+  );
+  const fanoutQuery = `mediaType=${mediaType}&tmdbId=${tmdbId}`;
+
+  useEffect(() => {
+    if (!isAvailable || !user) return;
+    let active = true;
+    const refresh = async () => {
+      try {
+        const { data } = await axios.get<{ status: string }>(
+          `/api/v1/request/fanout/status?${fanoutQuery}`
+        );
+        if (active) setFanoutStatus(data.status);
+        if (canManageOwners) {
+          const owners = await axios.get<{ owners: FanoutOwner[] }>(
+            `/api/v1/request/fanout/owners?${fanoutQuery}`
+          );
+          if (active) setFanoutOwners(owners.data.owners);
+        }
+      } catch {
+        if (active) setFanoutStatus('error');
+      }
+    };
+    void refresh();
+    if (
+      fanoutStatus === 'pending' ||
+      fanoutStatus === 'queued' ||
+      fanoutStatus === 'remove_pending'
+    ) {
+      const interval = setInterval(() => {
+        void refresh();
+      }, 4000);
+      return () => {
+        active = false;
+        clearInterval(interval);
+      };
+    }
+    return () => {
+      active = false;
+    };
+  }, [isAvailable, user, fanoutQuery, canManageOwners, fanoutStatus]);
+
+  const toggleLibrary = async (owner?: string) => {
+    setFanoutBusy(true);
+    try {
+      const { data } = await axios.post<{ status: string }>(
+        '/api/v1/request/fanout',
+        { mediaType, tmdbId, ...(owner ? { owner } : {}) }
+      );
+      if (!owner) setFanoutStatus(data.status);
+      if (canManageOwners) {
+        const owners = await axios.get<{ owners: FanoutOwner[] }>(
+          `/api/v1/request/fanout/owners?${fanoutQuery}`
+        );
+        setFanoutOwners(owners.data.owners);
+      }
+      onUpdate();
+    } catch {
+      if (!owner) setFanoutStatus('error');
+    } finally {
+      setFanoutBusy(false);
+    }
+  };
 
   // All pending requests
   const activeRequests = media?.requests.filter(
@@ -358,6 +428,37 @@ const RequestButton = ({
       },
       svg: <ArrowDownTrayIcon />,
     });
+  }
+
+  if (isAvailable && user) {
+    buttons.push({
+      id: 'fanout-self',
+      text: fanoutBusy ? 'Working...' : fanoutLabel(fanoutStatus),
+      action: () => {
+        if (
+          !fanoutBusy &&
+          fanoutStatus !== 'pending' &&
+          fanoutStatus !== 'queued'
+        )
+          void toggleLibrary();
+      },
+      svg: <ArrowDownTrayIcon />,
+    });
+    if (canManageOwners) {
+      ownerOptions(
+        fanoutOwners,
+        user.username || user.email || String(user.id)
+      ).forEach((option) => {
+        buttons.push({
+          id: `fanout-${option.owner}`,
+          text: option.label,
+          action: () => {
+            if (!fanoutBusy) void toggleLibrary(option.owner);
+          },
+          svg: <ArrowDownTrayIcon />,
+        });
+      });
+    }
   }
 
   const [buttonOne, ...others] = buttons;

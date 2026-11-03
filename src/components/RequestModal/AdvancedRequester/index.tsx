@@ -188,6 +188,43 @@ const AdvancedRequester = ({
     }
   }, [filteredUserData]);
 
+  // Request As owns the Arr destination, independently of generic server defaults.
+  useEffect(() => {
+    if (
+      !selectedUserId ||
+      !currentHasPermission(
+        [Permission.MANAGE_REQUESTS, Permission.MANAGE_USERS],
+        { type: 'or' }
+      )
+    )
+      return;
+    let active = true;
+    axios
+      .get<{
+        serverId: number | null;
+        profileId: number | null;
+        rootFolder: string | null;
+        tags: number[];
+      }>(
+        `/api/v1/request/destination?mediaType=${type}&userId=${selectedUserId}`
+      )
+      .then(({ data: destination }) => {
+        if (!active) return;
+        if (destination.serverId !== null)
+          setSelectedServer(destination.serverId);
+        if (destination.profileId !== null)
+          setSelectedProfile(destination.profileId);
+        if (destination.rootFolder) setSelectedFolder(destination.rootFolder);
+        setSelectedTags(destination.tags);
+      })
+      .catch(() => {
+        /* No plain user mapping: use normal server defaults. */
+      });
+    return () => {
+      active = false;
+    };
+  }, [selectedUserId, type, serverData?.server.id]);
+
   useEffect(() => {
     let defaultServer = data?.find(
       (server) => server.isDefault && is4k === server.is4k
@@ -690,6 +727,15 @@ const AdvancedRequester = ({
               value={selectedUser}
               onChange={(value) => {
                 setIgnoreQuota(false);
+                // Do not retain the previous user's Arr destination while loading this one.
+                const defaultServer =
+                  data?.find(
+                    (server) => server.isDefault && server.is4k === is4k
+                  ) ?? data?.[0];
+                setSelectedServer(defaultServer?.id ?? null);
+                setSelectedProfile(-1);
+                setSelectedFolder('');
+                setSelectedTags([]);
                 setSelectedUser(value);
               }}
               className="space-y-1"
