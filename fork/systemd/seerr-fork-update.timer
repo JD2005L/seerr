@@ -1,0 +1,10 @@
+[Unit]
+Description=Daily Seerr fork update check
+
+[Timer]
+OnCalendar=*-*-* 04:30:00 America/Edmonton
+RandomizedDelaySec=15min
+Persistent=true
+
+[Install]
+WantedBy=timers.target

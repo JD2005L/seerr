@@ -1,0 +1,10 @@
+[Unit]
+Description=Update Seerr (CT306) from the JD2005L/seerr fork and upstream releases
+After=pve-guests.service
+
+[Service]
+Type=oneshot
+ExecStart=/usr/local/sbin/seerr-fork-update
+StandardOutput=append:/var/log/seerr-fork-update.log
+StandardError=append:/var/log/seerr-fork-update.log
+TimeoutStartSec=2h

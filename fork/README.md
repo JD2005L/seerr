@@ -45,9 +45,41 @@ build), and the `watchtower` container (it only watched Seerr).
 - `develop`: upstream's branch, untouched.
 - `upstream` remote: https://github.com/seerr-team/seerr.
 
-## Taking a new upstream release
+## Automatic updates
 
-On CT320 as admin, in `/opt/project-workbench/workspaces/seerr`:
+`seerr-fork-update.timer` on pve1 runs `/usr/local/sbin/seerr-fork-update`
+(copy of `fork/pve1-update.sh`) every day at 04:30 Edmonton time:
+
+1. Syncs the release clone on CT320 (`/home/admin/seerr-release`, automation
+   only, reset to `origin/levac` every run) and installs dependencies.
+2. If upstream has a newer stable release (`vX.Y.Z`), pulls its image on
+   CT306, merges the tag into `levac` and pins the image digest in
+   `fork/UPSTREAM` (`fork/update.sh merge`).
+3. If CT306 is not already running that commit: `fork/build.sh`, then
+   `fork/deploy.sh` (smoke test on a copy of live data, cut over, automatic
+   rollback).
+4. Pushes an upstream merge to GitHub only once it is live.
+
+So anything pushed to `levac` on GitHub goes live the next morning, and so
+does each upstream release that merges cleanly and passes every gate. A
+merge conflict or any failed gate stops the run; production keeps what it
+was running. Results land in `/var/log/seerr-fork-update-events.jsonl` on
+pve1, and PVIBot relays them to James on Telegram
+(`fork/hermes/check_seerr_fork_update_events.py`, Hermes cron job
+`seerr-fork-update-events`). Full output: `/var/log/seerr-fork-update.log`.
+
+Run it now: `systemctl start seerr-fork-update` on pve1 (takes ~15 minutes).
+Pause it: `systemctl disable --now seerr-fork-update.timer`.
+
+Install or refresh on pve1 from a checkout:
+`install -m 755 fork/pve1-update.sh /usr/local/sbin/seerr-fork-update` and
+`install -m 644 fork/systemd/* /etc/systemd/system/`, then
+`systemctl daemon-reload && systemctl enable --now seerr-fork-update.timer`.
+
+## Taking a new upstream release by hand
+
+Needed when the updater reports a conflict. On CT320 as admin, in
+`/opt/project-workbench/workspaces/seerr` (not the release clone):
 
 1. `git fetch upstream --tags`
 2. `git checkout levac && git merge vX.Y.Z` and resolve conflicts. Keep both
