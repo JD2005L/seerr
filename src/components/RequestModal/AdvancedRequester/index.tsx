@@ -551,7 +551,8 @@ const AdvancedRequester = ({
             {(isValidating ||
               !serverData ||
               serverData.rootFolders.length > 1) && (
-              <div className="mb-3 w-full flex-shrink-0 flex-grow last:pr-0 md:w-1/4 md:pr-4">
+              // Hidden on purpose: Request As sets the root folder.
+              <div className="hidden">
                 <label htmlFor="folder">
                   {intl.formatMessage(messages.rootfolder)}
                 </label>
@@ -656,7 +657,8 @@ const AdvancedRequester = ({
         )}
         {selectedServer !== null &&
           (isValidating || !serverData || !!serverData?.tags?.length) && (
-            <div className="mb-2">
+            // Hidden on purpose: Request As sets the tags.
+            <div className="hidden">
               <label htmlFor="tags">{intl.formatMessage(messages.tags)}</label>
               <Select<OptionType, true>
                 name="tags"
@@ -716,6 +718,18 @@ const AdvancedRequester = ({
             </div>
           </div>
         )}
+        {!currentHasPermission([
+          Permission.MANAGE_REQUESTS,
+          Permission.MANAGE_USERS,
+        ]) &&
+          (selectedUser ?? currentUser) && (
+            <div className="space-y-1" data-testid="request-as-self">
+              <label>{intl.formatMessage(messages.requestas)}</label>
+              <div className="rounded-md border border-gray-700 bg-gray-800 px-3 py-2 text-sm text-white">
+                {(selectedUser ?? currentUser)?.displayName}
+              </div>
+            </div>
+          )}
         {currentHasPermission([
           Permission.MANAGE_REQUESTS,
           Permission.MANAGE_USERS,
