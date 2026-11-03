@@ -288,7 +288,7 @@ export class MediaRequest {
     if (overrideRulesResult.rootFolder) {
       rootFolder = overrideRulesResult.rootFolder;
     }
-    if (overrideRulesResult.profileId) {
+    if (!profileId && overrideRulesResult.profileId) {
       profileId = overrideRulesResult.profileId;
     }
     if (overrideRulesResult.tags) {

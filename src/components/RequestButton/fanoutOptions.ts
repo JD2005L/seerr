@@ -11,12 +11,18 @@ export function normalizeOwnerName(value: string): string {
     .replace(/[^a-z0-9]+/g, '-')
     .replace(/^-|-$/g, '');
 }
+export function desiredFanoutState(status: string): 'present' | 'absent' {
+  return status === 'fulfilled' || status === 'remove_pending'
+    ? 'absent'
+    : 'present';
+}
+
 export function fanoutLabel(status: string): string {
   switch (status) {
     case 'fulfilled':
       return 'Remove from My Library';
     case 'remove_pending':
-      return 'Cancel Removal from My Library';
+      return 'Retry Removal from My Library';
     case 'pending':
     case 'queued':
       return 'Queued for My Library';
@@ -36,6 +42,6 @@ export function ownerOptions(
     )
     .map((entry) => ({
       owner: entry.owner,
-      label: `${entry.status === 'remove_pending' ? 'Cancel Removal from' : entry.status === 'fulfilled' ? 'Remove from' : 'Add to'} ${entry.displayName} Library`,
+      label: `${entry.status === 'remove_pending' ? 'Retry Removal from' : entry.status === 'fulfilled' ? 'Remove from' : 'Add to'} ${entry.displayName} Library`,
     }));
 }

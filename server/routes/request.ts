@@ -121,7 +121,8 @@ requestRoutes.post('/fanout', async (req, res, next) => {
         req.body.owner,
         parseMediaType(req.body.mediaType),
         parseMediaId(req.body.tmdbId),
-        parseMediaId(req.body.tvdbId)
+        parseMediaId(req.body.tvdbId),
+        req.body.desiredState
       )
     );
   } catch (error) {

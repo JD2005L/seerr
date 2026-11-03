@@ -17,7 +17,12 @@ import axios from 'axios';
 import { useEffect, useMemo, useState } from 'react';
 import { useIntl } from 'react-intl';
 import { mutate } from 'swr';
-import { fanoutLabel, ownerOptions, type FanoutOwner } from './fanoutOptions';
+import {
+  desiredFanoutState,
+  fanoutLabel,
+  ownerOptions,
+  type FanoutOwner,
+} from './fanoutOptions';
 
 const messages = defineMessages('components.RequestButton', {
   viewrequest: 'View Request',
@@ -116,12 +121,17 @@ const RequestButton = ({
     };
   }, [isAvailable, user, fanoutQuery, canManageOwners, fanoutStatus]);
 
-  const toggleLibrary = async (owner?: string) => {
+  const toggleLibrary = async (owner?: string, status = fanoutStatus) => {
     setFanoutBusy(true);
     try {
       const { data } = await axios.post<{ status: string }>(
         '/api/v1/request/fanout',
-        { mediaType, tmdbId, ...(owner ? { owner } : {}) }
+        {
+          mediaType,
+          tmdbId,
+          desiredState: desiredFanoutState(status),
+          ...(owner ? { owner } : {}),
+        }
       );
       if (!owner) setFanoutStatus(data.status);
       if (canManageOwners) {
@@ -453,7 +463,12 @@ const RequestButton = ({
           id: `fanout-${option.owner}`,
           text: option.label,
           action: () => {
-            if (!fanoutBusy) void toggleLibrary(option.owner);
+            if (!fanoutBusy)
+              void toggleLibrary(
+                option.owner,
+                fanoutOwners.find((entry) => entry.owner === option.owner)
+                  ?.status
+              );
           },
           svg: <ArrowDownTrayIcon />,
         });

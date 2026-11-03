@@ -1630,6 +1630,180 @@ describe('DELETE /request/:requestId, orphaned season status reset', () => {
 });
 
 describe('per-owner library fan-out', () => {
+  it('separates unseen movie and TV titles with the same numeric ID', async () => {
+    const demo = await loginAs('demo@seerr.dev', 'test1234');
+    const movie = await demo
+      .post('/request/fanout')
+      .send({ mediaType: 'movie', tmdbId: 999123 });
+    const tv = await demo
+      .post('/request/fanout')
+      .send({ mediaType: 'tv', tmdbId: 999123 });
+    assert.strictEqual(movie.status, 200);
+    assert.strictEqual(tv.status, 200, JSON.stringify(tv.body));
+    assert.notStrictEqual(movie.body.requestId, tv.body.requestId);
+    const rows = await datasource.query(
+      'select mediaType from media_fanout_intent where owner = ?',
+      [movie.body.owner]
+    );
+    assert.deepStrictEqual(
+      rows.map((r: { mediaType: string }) => r.mediaType).sort(),
+      ['movie', 'tv']
+    );
+  });
+
+  it('reconciles a legacy unseen-title row without replacing another media type', async () => {
+    const demo = await loginAs('demo@seerr.dev', 'test1234');
+    const owner = (
+      await demo.get('/request/fanout/status?mediaType=movie&tmdbId=999125')
+    ).body.owner;
+    await datasource.query(
+      `insert into media_fanout_intent
+       (requestId, mediaType, app, tmdbId, owner, source, status)
+       values(?, ?, ?, ?, ?, ?, ?)`,
+      [-999125, 'movie', 'radarr', 999125, owner, 'seerr-ui', 'fulfilled']
+    );
+    const existing = await demo
+      .post('/request/fanout')
+      .send({ mediaType: 'movie', tmdbId: 999125, desiredState: 'absent' });
+    const tv = await demo
+      .post('/request/fanout')
+      .send({ mediaType: 'tv', tmdbId: 999125, desiredState: 'present' });
+    assert.strictEqual(existing.body.status, 'remove_pending');
+    assert.strictEqual(tv.body.status, 'pending');
+    const rows = await datasource.query(
+      'select mediaType, requestId from media_fanout_intent where owner = ?',
+      [owner]
+    );
+    assert.strictEqual(rows.length, 2);
+    assert.ok(
+      rows.some(
+        (row: { mediaType: string; requestId: number }) =>
+          row.mediaType === 'movie' && row.requestId === -999125
+      )
+    );
+  });
+
+  it('does not create an intent for repeated absent requests on missing media', async () => {
+    const demo = await loginAs('demo@seerr.dev', 'test1234');
+    const body = { mediaType: 'movie', tmdbId: 999126, desiredState: 'absent' };
+    const first = await demo.post('/request/fanout').send(body);
+    const retry = await demo.post('/request/fanout').send(body);
+    assert.strictEqual(first.body.status, 'missing');
+    assert.strictEqual(retry.body.status, 'missing');
+    assert.strictEqual(
+      (
+        await datasource.query(
+          'select id from media_fanout_intent where owner = ?',
+          [first.body.owner]
+        )
+      ).length,
+      0
+    );
+  });
+
+  it('honors explicit removal on retry and allows explicit cancellation', async () => {
+    const demo = await loginAs('demo@seerr.dev', 'test1234');
+    const body = {
+      mediaType: 'movie',
+      tmdbId: 999124,
+      desiredState: 'present',
+    };
+    const added = await demo.post('/request/fanout').send(body);
+    assert.strictEqual(added.body.status, 'pending');
+    await datasource.query(
+      'update media_fanout_intent set status = ? where requestId = ?',
+      ['fulfilled', added.body.requestId]
+    );
+    const removal = await demo
+      .post('/request/fanout')
+      .send({ ...body, desiredState: 'absent' });
+    assert.strictEqual(removal.body.status, 'remove_pending');
+    const retry = await demo
+      .post('/request/fanout')
+      .send({ ...body, desiredState: 'absent' });
+    assert.strictEqual(retry.body.status, 'remove_pending');
+    const cancel = await demo.post('/request/fanout').send(body);
+    assert.strictEqual(cancel.body.status, 'fulfilled');
+    assert.strictEqual(
+      (
+        await demo
+          .post('/request/fanout')
+          .send({ ...body, desiredState: 'invalid' })
+      ).status,
+      400
+    );
+  });
+
+  it('retries an explicit removal after a failed removal intent', async () => {
+    const demo = await loginAs('demo@seerr.dev', 'test1234');
+    const body = {
+      mediaType: 'movie',
+      tmdbId: 999127,
+      desiredState: 'present',
+    };
+    const added = await demo.post('/request/fanout').send(body);
+    await datasource.query(
+      'update media_fanout_intent set status = ? where requestId = ?',
+      ['error', added.body.requestId]
+    );
+    const retry = await demo
+      .post('/request/fanout')
+      .send({ ...body, desiredState: 'absent' });
+    assert.strictEqual(retry.body.status, 'remove_pending');
+  });
+
+  it('uses a mapped profile instead of a posted admin profile', async (t) => {
+    t.mock.method(
+      MediaRequestSubscriber.prototype,
+      'sendToRadarr',
+      async () => undefined
+    );
+    configureRadarr([
+      { id: 1, isDefault: true },
+      { id: 42, isDefault: false },
+    ]);
+    getSettings().sonarr = [];
+    const user = await getRepository(User).findOneOrFail({
+      where: { email: 'demo@seerr.dev' },
+    });
+    await getRepository(OverrideRule).save(
+      new OverrideRule({
+        radarrServiceId: 42,
+        users: String(user.id),
+        profileId: 7,
+      })
+    );
+    const admin = await loginAs('admin@seerr.dev', 'test1234');
+    const response = await admin.post('/request').send({
+      mediaType: 'movie',
+      mediaId: 998802,
+      userId: user.id,
+      profileId: 99,
+    });
+    assert.strictEqual(response.status, 201, JSON.stringify(response.body));
+    assert.strictEqual(response.body.profileId, 7);
+  });
+
+  it('keeps a regular requester selected profile when mapped', async () => {
+    configureRadarr([{ id: 1, isDefault: true }]);
+    getSettings().sonarr = [];
+    const user = await getRepository(User).findOneOrFail({
+      where: { email: 'demo@seerr.dev' },
+    });
+    await getRepository(OverrideRule).save(
+      new OverrideRule({
+        radarrServiceId: 1,
+        users: String(user.id),
+        profileId: 7,
+      })
+    );
+    const demo = await loginAs('demo@seerr.dev', 'test1234');
+    const response = await demo
+      .post('/request')
+      .send({ mediaType: 'movie', mediaId: 998803, profileId: 9 });
+    assert.strictEqual(response.status, 201, JSON.stringify(response.body));
+    assert.strictEqual(response.body.profileId, 9);
+  });
   it('isolates a self-service intent by owner and toggles removal', async () => {
     const demo = await loginAs('demo@seerr.dev', 'test1234');
     const admin = await loginAs('admin@seerr.dev', 'test1234');

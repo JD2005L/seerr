@@ -1,13 +1,13 @@
 import assert from 'node:assert/strict';
 import { describe, it } from 'node:test';
-import { fanoutLabel, ownerOptions } from './fanoutOptions';
+import { desiredFanoutState, fanoutLabel, ownerOptions } from './fanoutOptions';
 
 describe('fan-out actions', () => {
   it('permits a fulfilled library to be removed and a removal to be cancelled', () => {
     assert.strictEqual(fanoutLabel('fulfilled'), 'Remove from My Library');
     assert.strictEqual(
       fanoutLabel('remove_pending'),
-      'Cancel Removal from My Library'
+      'Retry Removal from My Library'
     );
     assert.strictEqual(fanoutLabel('pending'), 'Queued for My Library');
   });
@@ -17,7 +17,7 @@ describe('fan-out actions', () => {
         [{ owner: 'friend', displayName: 'Friend', status: 'remove_pending' }],
         'admin'
       ),
-      [{ owner: 'friend', label: 'Cancel Removal from Friend Library' }]
+      [{ owner: 'friend', label: 'Retry Removal from Friend Library' }]
     );
   });
   it('excludes self by normalized owner and names owner-specific removal', () => {
@@ -29,4 +29,10 @@ describe('fan-out actions', () => {
       { owner: 'friend', label: 'Remove from Friend Library' },
     ]);
   });
+});
+
+it('sends a stable removal intent for fulfilled and removal-pending libraries', () => {
+  assert.strictEqual(desiredFanoutState('fulfilled'), 'absent');
+  assert.strictEqual(desiredFanoutState('remove_pending'), 'absent');
+  assert.strictEqual(desiredFanoutState('missing'), 'present');
 });
