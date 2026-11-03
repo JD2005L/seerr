@@ -2,7 +2,9 @@ import { MediaType } from '@server/constants/media';
 import datasource from '@server/datasource';
 import { User } from '@server/entity/User';
 import { setupTestDb } from '@server/test/db';
+import yaml from 'js-yaml';
 import assert from 'node:assert/strict';
+import { readFileSync } from 'node:fs';
 import { it } from 'node:test';
 import { ensureFanoutTable, fanoutParameters, fanoutStatus } from './fanout';
 
@@ -83,5 +85,49 @@ it('reads PostgreSQL case-sensitive error fields and uses numbered parameters on
   assert.match(
     statements.find((sql) => /select id, owner, status/i.test(sql)) ?? '',
     /\$1.*\$2.*\$3/s
+  );
+});
+
+it('documents explicit desiredState values in the fan-out POST contract', () => {
+  const spec = yaml.load(readFileSync('seerr-api.yml', 'utf8')) as {
+    paths: Record<
+      string,
+      {
+        post: {
+          requestBody: {
+            content: Record<
+              string,
+              { schema: { properties: Record<string, { enum: string[] }> } }
+            >;
+          };
+        };
+      }
+    >;
+  };
+  assert.deepStrictEqual(
+    spec.paths['/request/fanout'].post.requestBody.content['application/json']
+      .schema.properties.desiredState.enum,
+    ['present', 'absent']
+  );
+});
+
+it('migrates old SQLite intent rows without discarding pending removals', async () => {
+  await datasource.query('drop table if exists media_fanout_intent');
+  await datasource.query(`create table media_fanout_intent
+    (id integer primary key autoincrement, requestId bigint not null, mediaType text not null,
+     app text not null, owner text not null, source text not null, status text not null,
+     unique(requestId,owner))`);
+  await datasource.query(`insert into media_fanout_intent
+    (requestId, mediaType, app, owner, source, status) values (1, 'movie', 'radarr', 'alice', 'request', 'remove_pending')`);
+  await ensureFanoutTable();
+  const rows = await datasource.query(
+    'select desiredState from media_fanout_intent where requestId = 1'
+  );
+  assert.strictEqual(rows[0].desiredState, 'absent');
+  await ensureFanoutTable();
+  assert.strictEqual(
+    (await datasource.query('select count(*) as n from media_fanout_intent'))[0]
+      .n,
+    1
   );
 });

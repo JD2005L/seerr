@@ -36,3 +36,22 @@ it('sends a stable removal intent for fulfilled and removal-pending libraries', 
   assert.strictEqual(desiredFanoutState('remove_pending'), 'absent');
   assert.strictEqual(desiredFanoutState('missing'), 'present');
 });
+
+it('retries failed removal instead of adding it back', () => {
+  assert.strictEqual(desiredFanoutState('error', 'absent'), 'absent');
+  assert.strictEqual(desiredFanoutState('error', 'present'), 'present');
+  assert.deepStrictEqual(
+    ownerOptions(
+      [
+        {
+          owner: 'friend',
+          displayName: 'Friend',
+          status: 'error',
+          desiredState: 'absent',
+        },
+      ],
+      'admin'
+    ),
+    [{ owner: 'friend', label: 'Retry Removal from Friend Library' }]
+  );
+});

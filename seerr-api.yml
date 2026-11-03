@@ -6638,6 +6638,9 @@ paths:
           name: mediaType
           required: true
           schema: { type: string, enum: [movie, tv] }
+        - in: query
+          name: is4k
+          schema: { type: boolean, default: false }
       security:
         - cookieAuth: []
         - apiKey: []
@@ -6706,11 +6709,15 @@ paths:
                 tmdbId: { type: integer }
                 tvdbId: { type: integer }
                 owner: { type: string }
+                desiredState: { type: string, enum: [present, absent] }
       security:
         - cookieAuth: []
         - apiKey: []
       responses:
-        '200': { description: Intent toggled }
+        '200':
+          {
+            description: Intent toggled; includes persisted desiredState for retries,
+          }
         '400': { description: Invalid input }
         '403': { description: Permission denied }
   /request/count:

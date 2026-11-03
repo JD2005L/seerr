@@ -206,7 +206,7 @@ const AdvancedRequester = ({
         rootFolder: string | null;
         tags: number[];
       }>(
-        `/api/v1/request/destination?mediaType=${type}&userId=${selectedUserId}`
+        `/api/v1/request/destination?mediaType=${type}&userId=${selectedUserId}&is4k=${is4k}`
       )
       .then(({ data: destination }) => {
         if (!active) return;
@@ -223,7 +223,7 @@ const AdvancedRequester = ({
     return () => {
       active = false;
     };
-  }, [selectedUserId, type, serverData?.server.id]);
+  }, [selectedUserId, type, is4k, serverData?.server.id]);
 
   useEffect(() => {
     let defaultServer = data?.find(

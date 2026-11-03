@@ -1651,6 +1651,62 @@ describe('per-owner library fan-out', () => {
     );
   });
 
+  it('separates unseen TV TMDB and TVDB keys with the same number', async () => {
+    const demo = await loginAs('demo@seerr.dev', 'test1234');
+    const tmdb = await demo
+      .post('/request/fanout')
+      .send({ mediaType: 'tv', tmdbId: 998821 });
+    const tvdb = await demo
+      .post('/request/fanout')
+      .send({ mediaType: 'tv', tvdbId: 998821 });
+    assert.strictEqual(tmdb.status, 200);
+    assert.strictEqual(tvdb.status, 200, JSON.stringify(tvdb.body));
+    assert.notStrictEqual(tmdb.body.requestId, tvdb.body.requestId);
+    const rows = await datasource.query(
+      'select tmdbId, tvdbId from media_fanout_intent where owner = ?',
+      [tmdb.body.owner]
+    );
+    assert.strictEqual(rows.length, 2);
+  });
+
+  it('returns persisted removal intent after worker error', async () => {
+    const demo = await loginAs('demo@seerr.dev', 'test1234');
+    const admin = await loginAs('admin@seerr.dev', 'test1234');
+    const body = { mediaType: 'movie', tmdbId: 998822 };
+    const added = await demo
+      .post('/request/fanout')
+      .send({ ...body, desiredState: 'present' });
+    await datasource.query(
+      'update media_fanout_intent set status = ? where requestId = ?',
+      ['fulfilled', added.body.requestId]
+    );
+    const removed = await demo
+      .post('/request/fanout')
+      .send({ ...body, desiredState: 'absent' });
+    assert.strictEqual(removed.body.desiredState, 'absent');
+    await datasource.query(
+      'update media_fanout_intent set status = ? where requestId = ?',
+      ['error', added.body.requestId]
+    );
+    const status = await demo.get(
+      '/request/fanout/status?mediaType=movie&tmdbId=998822'
+    );
+    assert.strictEqual(status.body.status, 'error');
+    assert.strictEqual(status.body.desiredState, 'absent');
+    const owners = await admin.get(
+      '/request/fanout/owners?mediaType=movie&tmdbId=998822'
+    );
+    const entry = owners.body.owners.find(
+      (o: { owner: string }) => o.owner === added.body.owner
+    );
+    assert.strictEqual(entry.desiredState, 'absent');
+    const retry = await demo
+      .post('/request/fanout')
+      .send({ ...body, desiredState: status.body.desiredState });
+    assert.strictEqual(retry.body.status, 'remove_pending');
+    assert.strictEqual(retry.body.desiredState, 'absent');
+  });
+
   it('reconciles a legacy unseen-title row without replacing another media type', async () => {
     const demo = await loginAs('demo@seerr.dev', 'test1234');
     const owner = (
@@ -1750,6 +1806,48 @@ describe('per-owner library fan-out', () => {
       .post('/request/fanout')
       .send({ ...body, desiredState: 'absent' });
     assert.strictEqual(retry.body.status, 'remove_pending');
+  });
+
+  it('does not route a selected-user 4K request through a regular mapping', async () => {
+    configureRadarr([
+      { id: 1, is4k: true, isDefault: true },
+      { id: 42, is4k: false, isDefault: false },
+    ]);
+    getSettings().sonarr = [];
+    const user = await getRepository(User).findOneOrFail({
+      where: { email: 'demo@seerr.dev' },
+    });
+    user.permissions |= Permission.REQUEST_4K_MOVIE;
+    await getRepository(User).save(user);
+    await getRepository(OverrideRule).save(
+      new OverrideRule({
+        radarrServiceId: 42,
+        users: String(user.id),
+        profileId: 7,
+      })
+    );
+    const admin = await loginAs('admin@seerr.dev', 'test1234');
+    const lookup = await admin.get(
+      `/request/destination?mediaType=movie&userId=${user.id}&is4k=true`
+    );
+    assert.strictEqual(lookup.status, 404);
+    const response = await admin.post('/request').send({
+      mediaType: 'movie',
+      mediaId: 998823,
+      userId: user.id,
+      is4k: true,
+      serverId: 1,
+    });
+    assert.strictEqual(response.status, 201, JSON.stringify(response.body));
+    assert.strictEqual(response.body.serverId, 1);
+    const wrongServer = await admin.post('/request').send({
+      mediaType: 'movie',
+      mediaId: 998824,
+      userId: user.id,
+      is4k: true,
+      serverId: 42,
+    });
+    assert.strictEqual(wrongServer.status, 400);
   });
 
   it('uses a mapped profile instead of a posted admin profile', async (t) => {

@@ -5,6 +5,7 @@ import OverrideRule from '@server/entity/OverrideRule';
 import { User } from '@server/entity/User';
 import type { MediaRequestBody } from '@server/interfaces/api/requestInterfaces';
 import { Permission } from '@server/lib/permissions';
+import { getSettings } from '@server/lib/settings';
 
 export function normalizeOwner(value: string): string {
   return value
@@ -93,9 +94,34 @@ export async function ensureFanoutTable(): Promise<void> {
     (id ${id}, requestId bigint not null, mediaId integer,
     mediaType text not null, app text not null, externalServiceId integer,
     tmdbId integer, tvdbId integer, owner text not null, source text not null,
-    status text not null default 'pending', lastError text, fulfilledAt timestamp,
+    status text not null default 'pending', desiredState text not null default 'present',
+    lastError text, fulfilledAt timestamp,
     createdAt timestamp default CURRENT_TIMESTAMP, updatedAt timestamp default CURRENT_TIMESTAMP,
     unique(requestId, owner))`);
+  // Older installations created this table before desiredState was persisted.
+  // Keep the worker's status column independent: it can overwrite status with
+  // 'error' without losing the last requested action.
+  const columns =
+    datasource.options.type === 'postgres'
+      ? await fanoutQuery(`select column_name as name from information_schema.columns
+          where table_schema = current_schema() and table_name = 'media_fanout_intent'
+          and column_name = 'desiredstate'`)
+      : await fanoutQuery(`select name from pragma_table_info('media_fanout_intent')
+          where name = 'desiredState'`);
+  if (!columns.length) {
+    try {
+      await fanoutQuery(`alter table media_fanout_intent add column
+        desiredState text not null default 'present'`);
+    } catch (error) {
+      // Another concurrent request may have added the same column.
+      const duplicate =
+        (error as { code?: string }).code === '42701' ||
+        /duplicate column name: desiredState/i.test(String(error));
+      if (!duplicate) throw error;
+    }
+    await fanoutQuery(`update media_fanout_intent set desiredState = 'absent'
+      where status = 'remove_pending' and desiredState = 'present'`);
+  }
   // First discard obsolete UI rows whose offset key is already occupied, then
   // move the rest. Both statements work on SQLite and PostgreSQL.
   await fanoutQuery(`delete from media_fanout_intent where source = 'seerr-ui'
@@ -125,6 +151,7 @@ type FanoutRow = {
   owner: string;
   status: string;
   lastError: string | null;
+  desiredState: 'present' | 'absent';
 };
 
 async function context(
@@ -149,7 +176,8 @@ async function rowsFor(
   owner?: string
 ): Promise<FanoutRow[]> {
   return fanoutQuery(
-    `select id, owner, status, lastError as "lastError" from media_fanout_intent
+    `select id, owner, status, lastError as "lastError",
+      desiredState as "desiredState" from media_fanout_intent
     where mediaType = ? and ((? is not null and tmdbId = ?) or (? is not null and tvdbId = ?))
     ${owner ? 'and owner = ?' : ''} order by updatedAt asc, id asc`,
     [
@@ -177,6 +205,7 @@ export async function fanoutStatus(
   return {
     owner: resolved,
     status: latest?.status ?? 'missing',
+    desiredState: latest?.desiredState ?? 'present',
     lastError: latest?.lastError ?? null,
     globallyAvailable: ids.media?.status === MediaStatus.AVAILABLE,
     mediaId: ids.media?.id ?? null,
@@ -211,6 +240,7 @@ export async function fanoutOwners(
   return owners.map((u) => ({
     ...u,
     status: byOwner.get(u.owner)?.status ?? 'missing',
+    desiredState: byOwner.get(u.owner)?.desiredState ?? 'present',
     lastError: byOwner.get(u.owner)?.lastError ?? null,
   }));
 }
@@ -247,21 +277,42 @@ export async function toggleFanout(
           : latest === 'fulfilled'
             ? 'remove_pending'
             : 'pending';
+  const intent =
+    status === 'remove_pending'
+      ? 'absent'
+      : status === 'fulfilled'
+        ? 'present'
+        : (desiredState ??
+          (latest === 'error' ? rows.at(-1)?.desiredState : 'present') ??
+          'present');
   const unseenId = ids.tmdbId ?? ids.tvdbId ?? 0;
   const requestId = ids.media?.id
     ? 100000000 + ids.media.id
-    : -(1000000000000 + unseenId * 2 + (type === MediaType.TV ? 1 : 0));
+    : -(
+        1000000000000000 +
+        unseenId * 4 +
+        (type === MediaType.TV ? 2 : 0) +
+        (ids.tmdbId ? 0 : 1)
+      );
   if (!Number.isSafeInteger(requestId))
     throw new FanoutError(400, 'Media ID is too large for a fan-out key.');
   if (!rows.length && status === 'missing')
-    return { owner, status, mediaId: null, requestId, action: 'none' };
+    return {
+      owner,
+      status,
+      desiredState: 'absent',
+      mediaId: null,
+      requestId,
+      action: 'none',
+    };
   if (rows.length) {
     await fanoutQuery(
-      `update media_fanout_intent set status = ?, lastError = NULL,
+      `update media_fanout_intent set status = ?, desiredState = ?, lastError = NULL,
       mediaId = coalesce(mediaId, ?), externalServiceId = coalesce(externalServiceId, ?),
       updatedAt = CURRENT_TIMESTAMP where id in (${rows.map(() => '?').join(',')})`,
       [
         status,
+        intent,
         ids.media?.id ?? null,
         ids.media?.externalServiceId ?? null,
         ...rows.map((r) => r.id),
@@ -270,11 +321,12 @@ export async function toggleFanout(
   } else {
     await fanoutQuery(
       `insert into media_fanout_intent
-      (requestId,mediaId,mediaType,app,externalServiceId,tmdbId,tvdbId,owner,source,status,lastError,updatedAt)
-      values(?,?,?,?,?,?,?,?,?,?,NULL,CURRENT_TIMESTAMP)
+      (requestId,mediaId,mediaType,app,externalServiceId,tmdbId,tvdbId,owner,source,status,desiredState,lastError,updatedAt)
+      values(?,?,?,?,?,?,?,?,?,?,?,NULL,CURRENT_TIMESTAMP)
       on conflict(requestId, owner) do update set mediaId=excluded.mediaId, mediaType=excluded.mediaType,
       app=excluded.app, externalServiceId=excluded.externalServiceId, tmdbId=excluded.tmdbId,
       tvdbId=excluded.tvdbId, source=excluded.source, status=excluded.status,
+      desiredState=excluded.desiredState,
       lastError=NULL, updatedAt=CURRENT_TIMESTAMP`,
       [
         requestId,
@@ -287,12 +339,14 @@ export async function toggleFanout(
         owner,
         'seerr-ui',
         status,
+        intent,
       ]
     );
   }
   return {
     owner,
     status,
+    desiredState: intent,
     mediaId: ids.media?.id ?? null,
     requestId,
     action:
@@ -304,11 +358,17 @@ export async function toggleFanout(
   };
 }
 
-export async function destinationFor(userId: number, type: MediaType) {
+export async function destinationFor(
+  userId: number,
+  type: MediaType,
+  is4k = false
+) {
   if (!Number.isSafeInteger(userId) || userId <= 0)
     throw new FanoutError(400, 'Invalid userId.');
   const user = await getRepository(User).findOne({ where: { id: userId } });
   if (!user) throw new FanoutError(404, 'User not found.');
+  // OverrideRule has no 4K dimension. Never apply its regular destination to 4K.
+  if (is4k) return null;
   const rules = await getRepository(OverrideRule).find({
     order: { id: 'ASC' },
   });
@@ -336,6 +396,18 @@ export async function destinationFor(userId: number, type: MediaType) {
 // The selected Request As user is authoritative; do not trust posted Arr fields.
 export async function applyDestination(body: MediaRequestBody) {
   if (!body.userId) return body;
+  if (body.is4k) {
+    const servers =
+      body.mediaType === MediaType.TV
+        ? getSettings().sonarr
+        : getSettings().radarr;
+    if (!servers.some((server) => server.id === body.serverId && server.is4k))
+      throw new FanoutError(
+        400,
+        'Select a valid 4K destination for Request As.'
+      );
+    return body;
+  }
   const destination = await destinationFor(
     body.userId,
     parseMediaType(body.mediaType)

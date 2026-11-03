@@ -74,6 +74,9 @@ const RequestButton = ({
   const [showRequest4kModal, setShowRequest4kModal] = useState(false);
   const [editRequest, setEditRequest] = useState(false);
   const [fanoutStatus, setFanoutStatus] = useState('missing');
+  const [fanoutDesiredState, setFanoutDesiredState] = useState<
+    'present' | 'absent'
+  >('present');
   const [fanoutOwners, setFanoutOwners] = useState<FanoutOwner[]>([]);
   const [fanoutBusy, setFanoutBusy] = useState(false);
   const isAvailable = media?.status === MediaStatus.AVAILABLE;
@@ -88,10 +91,14 @@ const RequestButton = ({
     let active = true;
     const refresh = async () => {
       try {
-        const { data } = await axios.get<{ status: string }>(
-          `/api/v1/request/fanout/status?${fanoutQuery}`
-        );
-        if (active) setFanoutStatus(data.status);
+        const { data } = await axios.get<{
+          status: string;
+          desiredState: 'present' | 'absent';
+        }>(`/api/v1/request/fanout/status?${fanoutQuery}`);
+        if (active) {
+          setFanoutStatus(data.status);
+          setFanoutDesiredState(data.desiredState);
+        }
         if (canManageOwners) {
           const owners = await axios.get<{ owners: FanoutOwner[] }>(
             `/api/v1/request/fanout/owners?${fanoutQuery}`
@@ -121,19 +128,29 @@ const RequestButton = ({
     };
   }, [isAvailable, user, fanoutQuery, canManageOwners, fanoutStatus]);
 
-  const toggleLibrary = async (owner?: string, status = fanoutStatus) => {
+  const toggleLibrary = async (
+    owner?: string,
+    status = fanoutStatus,
+    lastIntent = fanoutDesiredState
+  ) => {
+    const nextIntent = desiredFanoutState(status, lastIntent);
+    // Preserve the attempted action even if POST commits but its response fails.
+    if (!owner) setFanoutDesiredState(nextIntent);
     setFanoutBusy(true);
     try {
-      const { data } = await axios.post<{ status: string }>(
-        '/api/v1/request/fanout',
-        {
-          mediaType,
-          tmdbId,
-          desiredState: desiredFanoutState(status),
-          ...(owner ? { owner } : {}),
-        }
-      );
-      if (!owner) setFanoutStatus(data.status);
+      const { data } = await axios.post<{
+        status: string;
+        desiredState: 'present' | 'absent';
+      }>('/api/v1/request/fanout', {
+        mediaType,
+        tmdbId,
+        desiredState: nextIntent,
+        ...(owner ? { owner } : {}),
+      });
+      if (!owner) {
+        setFanoutStatus(data.status);
+        setFanoutDesiredState(data.desiredState);
+      }
       if (canManageOwners) {
         const owners = await axios.get<{ owners: FanoutOwner[] }>(
           `/api/v1/request/fanout/owners?${fanoutQuery}`
@@ -143,6 +160,14 @@ const RequestButton = ({
       onUpdate();
     } catch {
       if (!owner) setFanoutStatus('error');
+      else
+        setFanoutOwners((entries) =>
+          entries.map((entry) =>
+            entry.owner === owner
+              ? { ...entry, status: 'error', desiredState: nextIntent }
+              : entry
+          )
+        );
     } finally {
       setFanoutBusy(false);
     }
@@ -467,7 +492,9 @@ const RequestButton = ({
               void toggleLibrary(
                 option.owner,
                 fanoutOwners.find((entry) => entry.owner === option.owner)
-                  ?.status
+                  ?.status,
+                fanoutOwners.find((entry) => entry.owner === option.owner)
+                  ?.desiredState ?? 'present'
               );
           },
           svg: <ArrowDownTrayIcon />,

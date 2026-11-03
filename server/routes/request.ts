@@ -66,7 +66,8 @@ requestRoutes.get('/destination', async (req, res, next) => {
       );
     const destination = await destinationFor(
       Number(req.query.userId),
-      parseMediaType(req.query.mediaType)
+      parseMediaType(req.query.mediaType),
+      String(req.query.is4k) === 'true'
     );
     if (!destination)
       throw new FanoutError(
@@ -422,6 +423,8 @@ requestRoutes.post<never, MediaRequest, MediaRequestBody>(
         return;
       }
 
+      if (error instanceof FanoutError)
+        return next({ status: error.status, message: error.message });
       switch (error.constructor) {
         case RequestPermissionError:
         case QuotaRestrictedError:
