@@ -8,7 +8,11 @@ cd "$(git rev-parse --show-toplevel)"
 . fork/UPSTREAM
 
 NODE22=${NODE22:-/home/admin/.local/node22/node_modules/node/bin}
-export PATH="$NODE22:$PATH"
+# package.json scripts call pnpm themselves, so it has to be on PATH.
+SHIMS=$(mktemp -d)
+trap 'rm -rf "$SHIMS"' EXIT
+corepack enable --install-directory "$SHIMS" pnpm
+export PATH="$SHIMS:$NODE22:$PATH"
 node --version | grep -q '^v22\.' || { echo "Node 22 required (set NODE22)" >&2; exit 1; }
 
 if [ -n "$(git status --porcelain)" ]; then
@@ -24,13 +28,13 @@ fi
 
 SHA=$(git rev-parse HEAD)
 echo "== $SHA on $UPSTREAM_TAG"
-corepack pnpm typecheck
-corepack pnpm lint
-corepack pnpm test
+pnpm typecheck
+pnpm lint
+pnpm test
 rm -rf .next dist
 # COMMIT_TAG goes into the client bundle. It must equal the server's commit,
 # or every page load shows the "application updated, reload" dialog.
-COMMIT_TAG=$SHA corepack pnpm build
+COMMIT_TAG=$SHA pnpm build
 
 if ! grep -rqs "$SHA" .next/static; then
   echo "commit $SHA not found in the client bundle" >&2
