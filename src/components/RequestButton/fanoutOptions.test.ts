@@ -139,10 +139,7 @@ describe('request menu order', () => {
   });
 
   it('leads with an add when the first library already has the title', () => {
-    const groups = menuGroups([
-      { id: 'self', added: true },
-      { id: 'william' },
-    ]);
+    const groups = menuGroups([{ id: 'self', added: true }, { id: 'william' }]);
     assert.strictEqual(groups.main?.id, 'william');
     assert.deepStrictEqual(groups.top, []);
     assert.deepStrictEqual(

@@ -34,6 +34,13 @@ build), and the `watchtower` container (it only watched Seerr).
   after 10 minutes, and the menu says where each library stands ("Adding
   to William's Library...", "Retry ..."). For a failed, slow or unsaved
   change the person can press Notify PVIBot. See below.
+- **Request menu order and scrolling.** Libraries the title is already in go
+  last in the request menu, below a separator (`menuGroups` in
+  `fanoutOptions.ts`). `Common/ButtonWithDropdown` opens its menu with
+  `modal={false}` and a 75vh cap: Headless UI 2 menus lock page scrolling
+  by default, so a long menu that ran off the screen could not be reached.
+  This shared component is the likeliest place for an upstream merge
+  conflict.
 - **Request As picks the destination.** Each person's Radarr/Sonarr server,
   profile, root folder and tags come from their override rule. The request
   modal fills them in when an admin changes Request As, and the server applies
