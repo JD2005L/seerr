@@ -44,7 +44,7 @@ fi
 OUT=/tmp/seerr-bundle-$SHA.tar
 STAGE=$(mktemp -d)
 echo "$SHA" > "$STAGE/COMMIT"
-cp fork/Dockerfile fork/UPSTREAM fork/deploy.sh fork/smoke.js "$STAGE/"
+cp fork/Dockerfile fork/UPSTREAM fork/deploy.sh fork/smoke.js fork/seerr-help-note "$STAGE/"
 tar -cf "$OUT" --exclude=.next/cache .next dist seerr-api.yml -C "$STAGE" .
 rm -rf "$STAGE"
 echo "BUNDLE=$OUT"

@@ -6720,6 +6720,64 @@ paths:
           }
         '400': { description: Invalid input }
         '403': { description: Permission denied }
+  /request/fanout/help:
+    post:
+      summary: Ask PVIBot to look at a library add or removal that did not work
+      tags: [request]
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              type: object
+              required: [mediaType]
+              properties:
+                mediaType: { type: string, enum: [movie, tv] }
+                tmdbId: { type: integer }
+                tvdbId: { type: integer }
+                owner: { type: string }
+                clientError: { type: string, maxLength: 300 }
+      security:
+        - cookieAuth: []
+        - apiKey: []
+      responses:
+        '200':
+          {
+            description: Help request saved; status says whether PVIBot was reached,
+          }
+        '400': { description: Invalid input }
+        '403': { description: Permission denied }
+  /request/fanout/help/{helpId}/note:
+    post:
+      summary: PVIBot reports progress on a help request
+      tags: [request]
+      parameters:
+        - in: path
+          name: helpId
+          required: true
+          schema: { type: integer }
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              type: object
+              required: [status]
+              properties:
+                status:
+                  {
+                    type: string,
+                    enum: [investigating, resolving, resolved, needs_james],
+                  }
+                note: { type: string, maxLength: 200 }
+      security:
+        - cookieAuth: []
+        - apiKey: []
+      responses:
+        '200': { description: Note saved }
+        '400': { description: Invalid input }
+        '403': { description: Permission denied }
+        '404': { description: No such help request }
   /request/count:
     get:
       summary: Gets request counts

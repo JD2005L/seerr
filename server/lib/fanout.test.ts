@@ -1,12 +1,25 @@
 import { MediaType } from '@server/constants/media';
 import datasource from '@server/datasource';
 import { User } from '@server/entity/User';
+import { Permission } from '@server/lib/permissions';
 import { setupTestDb } from '@server/test/db';
+import { createHmac } from 'crypto';
 import yaml from 'js-yaml';
 import assert from 'node:assert/strict';
 import { readFileSync } from 'node:fs';
 import { it } from 'node:test';
-import { ensureFanoutTable, fanoutParameters, fanoutStatus } from './fanout';
+import {
+  ensureFanoutTable,
+  fanoutParameters,
+  fanoutStatus,
+  fanoutTime,
+  hermesEnvelope,
+  noteFanoutHelp,
+  requestFanoutHelp,
+  toggleFanout,
+  waitingSeconds,
+  type FanoutError,
+} from './fanout';
 
 setupTestDb();
 
@@ -130,4 +143,160 @@ it('migrates old SQLite intent rows without discarding pending removals', async 
       .n,
     1
   );
+});
+
+it('reads SQLite UTC timestamps and times only unfinished work', () => {
+  assert.strictEqual(
+    fanoutTime('2026-11-03 21:00:00'),
+    Date.parse('2026-11-03T21:00:00Z')
+  );
+  const now = Date.parse('2026-11-03T21:12:00Z');
+  assert.strictEqual(
+    waitingSeconds(
+      {
+        status: 'pending',
+        requestedAt: '2026-11-03 21:00:00',
+        createdAt: null,
+      },
+      now
+    ),
+    720
+  );
+  // Rows made before requestedAt existed fall back to when they were created.
+  assert.strictEqual(
+    waitingSeconds(
+      {
+        status: 'pending',
+        requestedAt: null,
+        createdAt: '2026-11-03 21:10:00',
+      },
+      now
+    ),
+    120
+  );
+  assert.strictEqual(
+    waitingSeconds(
+      { status: 'fulfilled', requestedAt: '2026-11-03 21:00:00' },
+      now
+    ),
+    null
+  );
+});
+
+it("signs Notify PVIBot the way Hermes's generic webhook route checks", () => {
+  const envelope = hermesEnvelope(
+    { event_type: 'seerr_library_help', help_id: 1 },
+    'secret',
+    'seerr-help-1',
+    1793750400000
+  );
+  assert.strictEqual(envelope.timestamp, '1793750400');
+  assert.strictEqual(
+    envelope.signature,
+    createHmac('sha256', 'secret')
+      .update(`1793750400.${envelope.body}`)
+      .digest('hex')
+  );
+  assert.deepStrictEqual(JSON.parse(envelope.body), {
+    event_type: 'seerr_library_help',
+    help_id: 1,
+  });
+});
+
+it('adds requestedAt to an existing intent table and stamps it on every ask', async () => {
+  await datasource.query('drop table if exists media_fanout_intent');
+  await datasource.query(`create table media_fanout_intent
+    (id integer primary key autoincrement, requestId bigint not null, mediaId integer,
+     mediaType text not null, app text not null, externalServiceId integer,
+     tmdbId integer, tvdbId integer, owner text not null, source text not null,
+     status text not null default 'pending', desiredState text not null default 'present',
+     lastError text, fulfilledAt timestamp,
+     createdAt timestamp default CURRENT_TIMESTAMP, updatedAt timestamp default CURRENT_TIMESTAMP,
+     unique(requestId, owner))`);
+  await ensureFanoutTable();
+  const alice = new User({ username: 'alice' });
+  await toggleFanout(alice, undefined, MediaType.TV, null, 424242, 'present');
+  const status = await fanoutStatus(
+    alice,
+    undefined,
+    MediaType.TV,
+    null,
+    424242
+  );
+  assert.strictEqual(status.status, 'pending');
+  assert.ok(status.requestedAt);
+  assert.ok((status.waitingSeconds ?? 99) < 60);
+  assert.strictEqual(status.help, null);
+});
+
+it('keeps a Notify PVIBot request and says so when PVIBot cannot be reached', async () => {
+  const alice = new User({ username: 'alice' });
+  await toggleFanout(alice, undefined, MediaType.TV, null, 515151, 'present');
+  // No config/levac-notify.json in tests, so nothing is sent.
+  const first = await requestFanoutHelp(
+    alice,
+    undefined,
+    MediaType.TV,
+    null,
+    515151,
+    'Unable to process fan-out request.'
+  );
+  assert.strictEqual(first.repeated, false);
+  assert.strictEqual(first.help.status, 'send_failed');
+  assert.match(first.help.sendError ?? '', /not set up/);
+  const status = await fanoutStatus(
+    alice,
+    undefined,
+    MediaType.TV,
+    null,
+    515151
+  );
+  assert.strictEqual(status.help?.id, first.help.id);
+  // A failed send is not "PVIBot is on it": pressing again sends a new one.
+  const second = await requestFanoutHelp(
+    alice,
+    undefined,
+    MediaType.TV,
+    null,
+    515151
+  );
+  assert.notStrictEqual(second.help.id, first.help.id);
+});
+
+it("records PVIBot's progress notes and keeps them short", async () => {
+  const alice = new User({ username: 'alice' });
+  const admin = new User({ username: 'pvibot', permissions: Permission.ADMIN });
+  const { help } = await requestFanoutHelp(
+    alice,
+    undefined,
+    MediaType.TV,
+    null,
+    616161
+  );
+  await assert.rejects(
+    noteFanoutHelp(alice, help.id, 'resolved', 'done'),
+    (error: FanoutError) => error.status === 403
+  );
+  await assert.rejects(
+    noteFanoutHelp(admin, help.id, 'sent', 'x'),
+    (error: FanoutError) => error.status === 400
+  );
+  await noteFanoutHelp(
+    admin,
+    help.id,
+    'investigating',
+    'Looking at the copy worker'
+  );
+  const done = await noteFanoutHelp(
+    admin,
+    help.id,
+    'resolved',
+    `Copied it   into\nAlice's library ${'x'.repeat(300)}`
+  );
+  assert.strictEqual(done.status, 'resolved');
+  assert.deepStrictEqual(
+    done.notes.map((note) => note.text.slice(0, 40)),
+    ['Looking at the copy worker', "Copied it into Alice's library xxxxxxxxx"]
+  );
+  assert.ok(done.notes[1].text.length <= 200);
 });

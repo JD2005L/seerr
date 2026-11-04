@@ -27,7 +27,13 @@ build), and the `watchtower` container (it only watched Seerr).
   (`/opt/mcp-tools/scripts/media-routing-watchdog.mjs`, every 2 minutes) does
   the actual add or remove and writes back `fulfilled` / `removed` / `error`.
   Code: `server/lib/fanout.ts`, `server/routes/request.ts`,
-  `src/components/RequestButton/`.
+  `src/components/RequestButton/`, `server/constants/fanout.ts` (stage rules
+  and plain-language reasons, shared by the page and the PVIBot message).
+- **Library progress and Notify PVIBot.** Each add or removal gets one live
+  message that updates in place until it is done, failed, or still waiting
+  after 10 minutes, and the menu says where each library stands ("Adding
+  to William's Library...", "Retry ..."). For a failed, slow or unsaved
+  change the person can press Notify PVIBot. See below.
 - **Request As picks the destination.** Each person's Radarr/Sonarr server,
   profile, root folder and tags come from their override rule. The request
   modal fills them in when an admin changes Request As, and the server applies
@@ -38,6 +44,37 @@ build), and the `watchtower` container (it only watched Seerr).
 - **Quality profile.** A regular user's chosen profile is kept instead of
   being replaced by their override rule (`server/entity/MediaRequest.ts`).
 - API spec entries for the new endpoints (`seerr-api.yml`).
+
+## Notify PVIBot
+
+```
+Seerr (CT306) --POST, X-Seerr-Key--> n8n "MEDIA - Seerr library help to Hermes"
+  (192.168.10.12, /webhook/seerr/library-help) --signed body as is-->
+  Hermes webhook route seerr-library (CT321 :8644) --> PVIBot, then Telegram
+PVIBot --seerr-library-note.sh--> pve.sh ct 306 seerr-help-note --> Seerr API
+```
+
+- `POST /request/fanout/help` saves the request in `media_fanout_help`, then
+  sends the title, library, what the person saw, the copy worker's status and
+  error, and the title's intent rows. The body is signed for Hermes's generic
+  webhook check (hex HMAC-SHA256 of `<timestamp>.<body>`); n8n checks the key
+  header and forwards the body byte for byte. A failed send is kept as
+  `send_failed` and the page tells the person to let James know.
+- PVIBot posts progress with `/root/.hermes/scripts/seerr-library-note.sh <id>
+  <investigating|resolving|resolved|needs_james> "<note>"`
+  (`fork/hermes/seerr-library-note.sh`). That runs
+  `/usr/local/sbin/seerr-help-note` on CT306 (`fork/seerr-help-note`,
+  installed by every deploy), which calls
+  `POST /request/fanout/help/:id/note` with Seerr's own API key. The page
+  shows the last 3 notes.
+- Settings live in `/docker/overseerr/levac-notify.json` on CT306
+  (`{"url", "key", "hermesSecret"}`, mode 600, owner 1000). `key` must match
+  the n8n workflow's check and `hermesSecret` the `seerr-library` route's
+  secret in `/root/.hermes/webhook_subscriptions.json` (mode 600). The route's
+  prompt tells PVIBot how the copy worker works and what it may fix.
+- TV shows: Sonarr usually holds no episode files here, so the copy worker
+  finds them through Plex (`plexShowForFanout`, added 2026-11-04), as it does
+  for movies.
 
 ## Branches
 

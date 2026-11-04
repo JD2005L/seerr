@@ -91,5 +91,7 @@ if ! wait_ready seerr "$SHA"; then
   echo "DEPLOY_FAIL rolled back to $PREV_IMAGE" >&2
   exit 1
 fi
+# PVIBot's way to post progress on Notify PVIBot requests (see fork/README.md).
+install -m 755 "$DIR/seerr-help-note" /usr/local/sbin/seerr-help-note
 echo "DEPLOY_OK $IMAGE ($SHA)"
 echo "rollback: docker rm -f seerr && docker rename $PREV seerr && docker update --restart unless-stopped seerr && docker start seerr"

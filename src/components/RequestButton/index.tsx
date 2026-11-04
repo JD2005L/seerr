@@ -4,25 +4,72 @@ import useSettings from '@app/hooks/useSettings';
 import { Permission, useUser } from '@app/hooks/useUser';
 import globalMessages from '@app/i18n/globalMessages';
 import defineMessages from '@app/utils/defineMessages';
-import { ArrowDownTrayIcon } from '@heroicons/react/24/outline';
+import {
+  ArrowDownTrayIcon,
+  ArrowPathIcon,
+  ChatBubbleLeftEllipsisIcon,
+  ClockIcon,
+  ExclamationTriangleIcon,
+  MinusCircleIcon,
+} from '@heroicons/react/24/outline';
 import {
   CheckIcon,
   InformationCircleIcon,
   XMarkIcon,
 } from '@heroicons/react/24/solid';
+import {
+  fanoutStage,
+  helpIsOpen,
+  type FanoutHelp,
+} from '@server/constants/fanout';
 import { MediaRequestStatus, MediaStatus } from '@server/constants/media';
 import type Media from '@server/entity/Media';
 import type { MediaRequest } from '@server/entity/MediaRequest';
 import axios from 'axios';
-import { useEffect, useMemo, useState } from 'react';
+import { useCallback, useEffect, useMemo, useRef, useState } from 'react';
 import { useIntl } from 'react-intl';
 import { mutate } from 'swr';
 import {
   desiredFanoutState,
+  fanoutInProgress,
   fanoutLabel,
+  helpLabel,
+  libraryName,
+  libraryToastView,
   ownerOptions,
   type FanoutOwner,
+  type LibraryWatch,
 } from './fanoutOptions';
+import { hideLibraryToast, showLibraryToast } from './libraryToast';
+
+// Key for the signed-in person's own library in the per-library maps below.
+const SELF = '';
+
+const stageIcon = (entry: FanoutOwner) => {
+  switch (fanoutStage(entry)) {
+    case 'done':
+      return <MinusCircleIcon />;
+    case 'adding':
+    case 'removing':
+      return <ArrowPathIcon className="animate-spin" />;
+    case 'slow':
+      return <ClockIcon />;
+    case 'failed':
+      return <ExclamationTriangleIcon />;
+    default:
+      return <ArrowDownTrayIcon />;
+  }
+};
+
+const errorText = (error: unknown): string => {
+  const data = axios.isAxiosError(error) ? error.response?.data : undefined;
+  const message =
+    (data as { message?: string } | undefined)?.message ??
+    (error as Error)?.message;
+  return message
+    ? String(message).slice(0, 200)
+    : 'Seerr did not answer. Check your connection and try again.';
+};
 
 const messages = defineMessages('components.RequestButton', {
   viewrequest: 'View Request',
@@ -73,12 +120,17 @@ const RequestButton = ({
   const [showRequestModal, setShowRequestModal] = useState(false);
   const [showRequest4kModal, setShowRequest4kModal] = useState(false);
   const [editRequest, setEditRequest] = useState(false);
-  const [fanoutStatus, setFanoutStatus] = useState('missing');
-  const [fanoutDesiredState, setFanoutDesiredState] = useState<
-    'present' | 'absent'
-  >('present');
+  // "My Library": the signed-in person's own entry, from /fanout/status.
+  const [selfEntry, setSelfEntry] = useState<FanoutOwner>({
+    owner: SELF,
+    displayName: '',
+    status: 'missing',
+  });
+  // Everyone else's, for admins, from /fanout/owners.
   const [fanoutOwners, setFanoutOwners] = useState<FanoutOwner[]>([]);
-  const [fanoutBusy, setFanoutBusy] = useState(false);
+  // Libraries this page is following since the person clicked, by owner.
+  const [watched, setWatched] = useState<Record<string, LibraryWatch>>({});
+  const [busy, setBusy] = useState<Record<string, 'saving' | 'notifying'>>({});
   const isAvailable = media?.status === MediaStatus.AVAILABLE;
   const canManageOwners = hasPermission(
     [Permission.ADMIN, Permission.MANAGE_USERS, Permission.MANAGE_REQUESTS],
@@ -86,92 +138,206 @@ const RequestButton = ({
   );
   const fanoutQuery = `mediaType=${mediaType}&tmdbId=${tmdbId}`;
 
-  useEffect(() => {
-    if (!isAvailable || !user) return;
-    let active = true;
-    const refresh = async () => {
-      try {
-        const { data } = await axios.get<{
-          status: string;
-          desiredState: 'present' | 'absent';
-        }>(`/api/v1/request/fanout/status?${fanoutQuery}`);
-        if (active) {
-          setFanoutStatus(data.status);
-          setFanoutDesiredState(data.desiredState);
-        }
-        if (canManageOwners) {
-          const owners = await axios.get<{ owners: FanoutOwner[] }>(
-            `/api/v1/request/fanout/owners?${fanoutQuery}`
-          );
-          if (active) setFanoutOwners(owners.data.owners);
-        }
-      } catch {
-        if (active) setFanoutStatus('error');
-      }
-    };
-    void refresh();
-    if (
-      fanoutStatus === 'pending' ||
-      fanoutStatus === 'queued' ||
-      fanoutStatus === 'remove_pending'
-    ) {
-      const interval = setInterval(() => {
-        void refresh();
-      }, 4000);
-      return () => {
-        active = false;
-        clearInterval(interval);
-      };
-    }
-    return () => {
-      active = false;
-    };
-  }, [isAvailable, user, fanoutQuery, canManageOwners, fanoutStatus]);
+  const entryFor = useCallback(
+    (key: string): FanoutOwner | undefined =>
+      key === SELF
+        ? selfEntry
+        : fanoutOwners.find((entry) => entry.owner === key),
+    [selfEntry, fanoutOwners]
+  );
+  const nameFor = useCallback(
+    (key: string) =>
+      libraryName(key === SELF ? undefined : entryFor(key)?.displayName),
+    [entryFor]
+  );
+  // Toast buttons outlive the render that drew them; read live state through these.
+  const latest = useRef({ entryFor, watched });
+  latest.current = { entryFor, watched };
 
-  const toggleLibrary = async (
-    owner?: string,
-    status = fanoutStatus,
-    lastIntent = fanoutDesiredState
-  ) => {
-    const nextIntent = desiredFanoutState(status, lastIntent);
-    // Preserve the attempted action even if POST commits but its response fails.
-    if (!owner) setFanoutDesiredState(nextIntent);
-    setFanoutBusy(true);
+  const refresh = useCallback(async () => {
     try {
-      const { data } = await axios.post<{
-        status: string;
-        desiredState: 'present' | 'absent';
-      }>('/api/v1/request/fanout', {
-        mediaType,
-        tmdbId,
-        desiredState: nextIntent,
-        ...(owner ? { owner } : {}),
-      });
-      if (!owner) {
-        setFanoutStatus(data.status);
-        setFanoutDesiredState(data.desiredState);
-      }
+      const { data } = await axios.get<FanoutOwner>(
+        `/api/v1/request/fanout/status?${fanoutQuery}`
+      );
+      setSelfEntry({ ...data, owner: SELF, displayName: '' });
       if (canManageOwners) {
         const owners = await axios.get<{ owners: FanoutOwner[] }>(
           `/api/v1/request/fanout/owners?${fanoutQuery}`
         );
         setFanoutOwners(owners.data.owners);
       }
-      onUpdate();
     } catch {
-      if (!owner) setFanoutStatus('error');
-      else
-        setFanoutOwners((entries) =>
-          entries.map((entry) =>
-            entry.owner === owner
-              ? { ...entry, status: 'error', desiredState: nextIntent }
-              : entry
-          )
-        );
+      // Keep what is shown; the next poll or click tries again.
+    }
+  }, [fanoutQuery, canManageOwners]);
+
+  useEffect(() => {
+    if (!isAvailable || !user) return;
+    void refresh();
+  }, [isAvailable, user, refresh]);
+
+  // Poll quickly while something this page asked for is still moving, slowly
+  // while anything else is, and not at all otherwise.
+  const allEntries = useMemo(
+    () => [selfEntry, ...fanoutOwners],
+    [selfEntry, fanoutOwners]
+  );
+  const pollEvery = useMemo(() => {
+    const following = Object.keys(watched).some((key) => {
+      const entry = entryFor(key);
+      return (
+        !!busy[key] ||
+        (!!entry &&
+          (fanoutInProgress(fanoutStage(entry)) || helpIsOpen(entry.help)))
+      );
+    });
+    if (following) return 5000;
+    return allEntries.some((entry) => {
+      const stage = fanoutStage(entry);
+      return stage === 'adding' || stage === 'removing';
+    })
+      ? 30000
+      : 0;
+  }, [watched, busy, entryFor, allEntries]);
+
+  useEffect(() => {
+    if (!isAvailable || !user || !pollEvery) return;
+    const interval = setInterval(() => void refresh(), pollEvery);
+    return () => clearInterval(interval);
+  }, [isAvailable, user, pollEvery, refresh]);
+
+  const watch = (key: string, change: Partial<LibraryWatch>) =>
+    setWatched((current) => ({
+      ...current,
+      [key]: { ...(current[key] ?? { wants: 'present' }), ...change },
+    }));
+  const unwatch = (key: string) =>
+    setWatched((current) => {
+      if (!(key in current)) return current;
+      const next = { ...current };
+      delete next[key];
+      return next;
+    });
+  const setBusyFor = (key: string, state?: 'saving' | 'notifying') =>
+    setBusy((current) => {
+      const next = { ...current };
+      if (state) next[key] = state;
+      else delete next[key];
+      return next;
+    });
+
+  const toggleLibrary = async (key: string, wants?: 'present' | 'absent') => {
+    const entry = latest.current.entryFor(key);
+    const nextIntent =
+      wants ??
+      desiredFanoutState(entry?.status ?? 'missing', entry?.desiredState);
+    watch(key, {
+      wants: nextIntent,
+      saveError: null,
+      helpError: null,
+      helped: false,
+    });
+    setBusyFor(key, 'saving');
+    try {
+      await axios.post('/api/v1/request/fanout', {
+        mediaType,
+        tmdbId,
+        desiredState: nextIntent,
+        ...(key === SELF ? {} : { owner: key }),
+      });
+      await refresh();
+      onUpdate();
+    } catch (error) {
+      watch(key, { saveError: errorText(error) });
     } finally {
-      setFanoutBusy(false);
+      setBusyFor(key);
     }
   };
+
+  // Clicking a library entry: add, remove or retry, or, while it is still
+  // running, show where it is instead of asking again.
+  const libraryClick = (key: string) => {
+    if (busy[key]) return;
+    const entry = entryFor(key);
+    if (entry && fanoutInProgress(fanoutStage(entry))) {
+      watch(key, {
+        wants: entry.status === 'remove_pending' ? 'absent' : 'present',
+      });
+      void refresh();
+      return;
+    }
+    void toggleLibrary(key);
+  };
+
+  const notifyPvibot = async (key: string) => {
+    if (busy[key]) return;
+    const current = latest.current.watched[key];
+    const entry = latest.current.entryFor(key);
+    watch(key, {
+      wants:
+        current?.wants ??
+        (entry?.status === 'remove_pending' ||
+        (entry?.status === 'error' && entry.desiredState === 'absent')
+          ? 'absent'
+          : 'present'),
+      helped: true,
+      helpError: null,
+    });
+    setBusyFor(key, 'notifying');
+    try {
+      const { data } = await axios.post<{ help: FanoutHelp }>(
+        '/api/v1/request/fanout/help',
+        {
+          mediaType,
+          tmdbId,
+          ...(key === SELF ? {} : { owner: key }),
+          ...(current?.saveError ? { clientError: current.saveError } : {}),
+        }
+      );
+      // The add/remove error is now with PVIBot; follow its reply instead.
+      watch(key, { saveError: null });
+      const withHelp = (item: FanoutOwner) => ({ ...item, help: data.help });
+      if (key === SELF) setSelfEntry(withHelp);
+      else
+        setFanoutOwners((owners) =>
+          owners.map((item) => (item.owner === key ? withHelp(item) : item))
+        );
+      await refresh();
+    } catch (error) {
+      watch(key, { helpError: errorText(error) });
+    } finally {
+      setBusyFor(key);
+    }
+  };
+
+  // Keep each followed library's live message in step with what the server says.
+  const toastId = (key: string) =>
+    `fanout-${mediaType}-${tmdbId}-${key || 'self'}`;
+  useEffect(() => {
+    for (const [key, following] of Object.entries(watched)) {
+      const entry = entryFor(key);
+      if (!entry) continue;
+      const view = libraryToastView(entry, following, busy[key], nameFor(key));
+      showLibraryToast(toastId(key), view, {
+        onRetry: () => void toggleLibrary(key, following.wants),
+        onNotify: () => void notifyPvibot(key),
+        onDismiss: () => unwatch(key),
+      });
+      if (view.final) unwatch(key);
+    }
+    // toggleLibrary/notifyPvibot read live state through `latest`.
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [watched, busy, entryFor, nameFor]);
+
+  // Leaving the page: drop messages still waiting on this page's polling.
+  useEffect(
+    () => () => {
+      for (const key of Object.keys(latest.current.watched))
+        hideLibraryToast(toastId(key));
+    },
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+    [tmdbId, mediaType]
+  );
 
   // All pending requests
   const activeRequests = media?.requests.filter(
@@ -466,39 +632,43 @@ const RequestButton = ({
   }
 
   if (isAvailable && user) {
-    buttons.push({
-      id: 'fanout-self',
-      text: fanoutBusy ? 'Working...' : fanoutLabel(fanoutStatus),
-      action: () => {
-        if (
-          !fanoutBusy &&
-          fanoutStatus !== 'pending' &&
-          fanoutStatus !== 'queued'
-        )
-          void toggleLibrary();
-      },
-      svg: <ArrowDownTrayIcon />,
-    });
+    const libraryButtons = (key: string, entry: FanoutOwner, label: string) => {
+      const name = nameFor(key);
+      buttons.push({
+        id: key === SELF ? 'fanout-self' : `fanout-${key}`,
+        text:
+          busy[key] === 'saving'
+            ? watched[key]?.wants === 'absent'
+              ? `Removing from ${name.label}...`
+              : `Adding to ${name.label}...`
+            : label,
+        action: () => libraryClick(key),
+        svg: busy[key] ? (
+          <ArrowPathIcon className="animate-spin" />
+        ) : (
+          stageIcon(entry)
+        ),
+      });
+      const notify = helpLabel(entry, name.label, !!watched[key]?.saveError);
+      if (notify)
+        buttons.push({
+          id: key === SELF ? 'fanout-help-self' : `fanout-help-${key}`,
+          text: busy[key] === 'notifying' ? 'Telling PVIBot...' : notify,
+          action: () =>
+            helpIsOpen(entry.help)
+              ? watch(key, { helped: true })
+              : void notifyPvibot(key),
+          svg: <ChatBubbleLeftEllipsisIcon />,
+        });
+    };
+    libraryButtons(SELF, selfEntry, fanoutLabel(selfEntry));
     if (canManageOwners) {
       ownerOptions(
         fanoutOwners,
         user.username || user.email || String(user.id)
       ).forEach((option) => {
-        buttons.push({
-          id: `fanout-${option.owner}`,
-          text: option.label,
-          action: () => {
-            if (!fanoutBusy)
-              void toggleLibrary(
-                option.owner,
-                fanoutOwners.find((entry) => entry.owner === option.owner)
-                  ?.status,
-                fanoutOwners.find((entry) => entry.owner === option.owner)
-                  ?.desiredState ?? 'present'
-              );
-          },
-          svg: <ArrowDownTrayIcon />,
-        });
+        const entry = entryFor(option.owner);
+        if (entry) libraryButtons(option.owner, entry, option.label);
       });
     }
   }

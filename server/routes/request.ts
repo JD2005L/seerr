@@ -28,8 +28,10 @@ import {
   destinationFor,
   fanoutOwners,
   fanoutStatus,
+  noteFanoutHelp,
   parseMediaId,
   parseMediaType,
+  requestFanoutHelp,
   toggleFanout,
 } from '@server/lib/fanout';
 import { Permission } from '@server/lib/permissions';
@@ -50,6 +52,11 @@ const fanoutFailure = (
   error: unknown,
   next: (error: { status: number; message: string }) => void
 ) => {
+  if (!(error instanceof FanoutError))
+    logger.error('Fan-out request failed', {
+      label: 'Fan-out',
+      errorMessage: (error as Error)?.message ?? String(error),
+    });
   const failure =
     error instanceof FanoutError
       ? error
@@ -125,6 +132,35 @@ requestRoutes.post('/fanout', async (req, res, next) => {
         parseMediaId(req.body.tvdbId),
         req.body.desiredState
       )
+    );
+  } catch (error) {
+    fanoutFailure(error, next);
+  }
+});
+
+requestRoutes.post('/fanout/help', async (req, res, next) => {
+  try {
+    return res.json(
+      await requestFanoutHelp(
+        req.user,
+        req.body.owner,
+        parseMediaType(req.body.mediaType),
+        parseMediaId(req.body.tmdbId),
+        parseMediaId(req.body.tvdbId),
+        req.body.clientError
+      )
+    );
+  } catch (error) {
+    fanoutFailure(error, next);
+  }
+});
+
+requestRoutes.post('/fanout/help/:helpId/note', async (req, res, next) => {
+  try {
+    const helpId = parseMediaId(req.params.helpId);
+    if (!helpId) throw new FanoutError(400, 'Invalid help ID.');
+    return res.json(
+      await noteFanoutHelp(req.user, helpId, req.body.status, req.body.note)
     );
   } catch (error) {
     fanoutFailure(error, next);

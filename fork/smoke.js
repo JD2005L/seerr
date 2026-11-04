@@ -107,11 +107,59 @@ const read = (q) => call('/api/v1/request/fanout/status?' + q);
       .size !== 3
   )
     fail('media identity collision');
+  if (
+    reads.some(
+      (x) => typeof x.data.waitingSeconds !== 'number' || !x.data.requestedAt
+    )
+  )
+    fail('waiting time missing: ' + JSON.stringify(reads[0].data));
+
+  // Notify PVIBot. The smoke container has no network, so the send fails and
+  // the request must still be saved and reported as not delivered.
+  const helpCall = (path, body) =>
+    call('/api/v1/request/fanout/help' + path, {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify(body),
+    });
+  const help = await helpCall('', {
+    owner: 'james',
+    mediaType: 'movie',
+    tmdbId: 12345,
+    clientError: 'smoke test',
+  });
+  if (
+    help.status !== 200 ||
+    !(help.data.help?.id > 0) ||
+    help.data.help.status !== 'send_failed'
+  )
+    fail('Notify PVIBot not saved: ' + JSON.stringify(help.data));
+  const note = await helpCall(`/${help.data.help.id}/note`, {
+    status: 'investigating',
+    note: 'smoke test note',
+  });
+  if (note.status !== 200 || note.data.notes?.[0]?.text !== 'smoke test note')
+    fail('PVIBot note not saved: ' + JSON.stringify(note.data));
+  const helped = await read('mediaType=movie&tmdbId=12345&owner=james');
+  if (helped.data.help?.id !== help.data.help.id)
+    fail('help missing from status: ' + JSON.stringify(helped.data));
+  const badNote = await helpCall(`/${help.data.help.id}/note`, {
+    status: 'sent',
+  });
+  if (badNote.status !== 400)
+    fail('invalid PVIBot status accepted: ' + badNote.status);
 
   const anon = await fetch(
     base + '/api/v1/request/fanout/status?mediaType=movie&tmdbId=1423191'
   );
   if (anon.status !== 401) fail('anonymous request authorized: ' + anon.status);
+  const anonHelp = await fetch(base + '/api/v1/request/fanout/help', {
+    method: 'POST',
+    headers: { 'Content-Type': 'application/json' },
+    body: JSON.stringify({ mediaType: 'movie', tmdbId: 12345 }),
+  });
+  if (anonHelp.status !== 401)
+    fail('anonymous Notify PVIBot authorized: ' + anonHelp.status);
 
   const dir = '/app/.next/static/chunks';
   const chunks = [];
@@ -124,8 +172,9 @@ const read = (q) => call('/api/v1/request/fanout/status?' + q);
   };
   walk(dir);
   const has = (s) => chunks.some((c) => c.includes(s));
-  if (!has('Add to My Library'))
-    fail('fan-out button missing from client bundle');
+  if (!has('Notify PVIBot') || !has('library-toast'))
+    fail('library feedback missing from client bundle');
+  if (!has('Adding to ')) fail('fan-out button missing from client bundle');
   if (!has('request-as-self'))
     fail('Request As statement missing from client bundle');
   if (!has(process.env.EXPECT_COMMIT))
@@ -147,6 +196,7 @@ const read = (q) => call('/api/v1/request/fanout/status?' + q);
           tvdb.data.requestId,
         ],
         anonymous: anon.status,
+        help: help.data.help.status,
       })
   );
 })().catch((error) => {

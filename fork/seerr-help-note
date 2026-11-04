@@ -1,0 +1,30 @@
+#!/bin/sh
+# PVIBot's progress on a Notify PVIBot request, posted to the local Seerr with
+# its own API key. Installed on CT306 as /usr/local/sbin/seerr-help-note by
+# fork/deploy.sh. PVIBot calls it through fork/hermes/seerr-library-note.sh.
+#
+#   seerr-help-note <help id> <base64 of {"status": "...", "note": "..."}>
+#
+# The body goes in base64 so it survives ssh and pct exec quoting unchanged.
+set -eu
+case "${1:-}" in '' | *[!0-9]*)
+  echo "usage: seerr-help-note <help id> <base64 json>" >&2
+  exit 2
+  ;;
+esac
+printf '%s' "${2:-}" | base64 -d | docker exec -i seerr node -e '
+const id = process.argv[1];
+let body = "";
+process.stdin.on("data", (d) => (body += d)).on("end", async () => {
+  const key = require("/app/config/settings.json").main.apiKey;
+  const r = await fetch(
+    `http://127.0.0.1:5055/api/v1/request/fanout/help/${id}/note`,
+    {
+      method: "POST",
+      headers: { "X-Api-Key": key, "Content-Type": "application/json" },
+      body,
+    }
+  );
+  console.log(r.status, (await r.text()).slice(0, 300));
+  process.exit(r.ok ? 0 : 1);
+});' "$1"

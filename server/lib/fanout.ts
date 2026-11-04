@@ -1,3 +1,14 @@
+import TheMovieDb from '@server/api/themoviedb';
+import {
+  FANOUT_HELP_REPORTS,
+  fanoutStage,
+  fanoutSummary,
+  fanoutWants,
+  waitedFor,
+  type FanoutHelp,
+  type FanoutHelpNote,
+  type FanoutHelpStatus,
+} from '@server/constants/fanout';
 import { MediaStatus, MediaType } from '@server/constants/media';
 import datasource, { getRepository } from '@server/datasource';
 import Media from '@server/entity/Media';
@@ -6,6 +17,11 @@ import { User } from '@server/entity/User';
 import type { MediaRequestBody } from '@server/interfaces/api/requestInterfaces';
 import { Permission } from '@server/lib/permissions';
 import { getSettings } from '@server/lib/settings';
+import logger from '@server/logger';
+import axios from 'axios';
+import { createHmac } from 'crypto';
+import { readFileSync } from 'fs';
+import path from 'path';
 
 export function normalizeOwner(value: string): string {
   return value
@@ -85,6 +101,37 @@ async function fanoutQuery(sql: string, parameters: unknown[] = []) {
   );
 }
 
+// Returns true when the column was added.
+async function addColumnIfMissing(
+  name: string,
+  definition: string,
+  table = 'media_fanout_intent'
+): Promise<boolean> {
+  const columns =
+    datasource.options.type === 'postgres'
+      ? await fanoutQuery(
+          `select column_name as name from information_schema.columns
+          where table_schema = current_schema() and table_name = ?
+          and column_name = ?`,
+          [table, name.toLowerCase()]
+        )
+      : await fanoutQuery(
+          `select name from pragma_table_info('${table}') where name = ?`,
+          [name]
+        );
+  if (columns.length) return false;
+  try {
+    await fanoutQuery(`alter table ${table} add column ${definition}`);
+  } catch (error) {
+    // Another concurrent request may have added the same column.
+    const duplicate =
+      (error as { code?: string }).code === '42701' ||
+      new RegExp(`duplicate column name: ${name}`, 'i').test(String(error));
+    if (!duplicate) throw error;
+  }
+  return true;
+}
+
 export async function ensureFanoutTable(): Promise<void> {
   const id =
     datasource.options.type === 'postgres'
@@ -95,33 +142,23 @@ export async function ensureFanoutTable(): Promise<void> {
     mediaType text not null, app text not null, externalServiceId integer,
     tmdbId integer, tvdbId integer, owner text not null, source text not null,
     status text not null default 'pending', desiredState text not null default 'present',
-    lastError text, fulfilledAt timestamp,
+    lastError text, fulfilledAt timestamp, requestedAt timestamp,
     createdAt timestamp default CURRENT_TIMESTAMP, updatedAt timestamp default CURRENT_TIMESTAMP,
     unique(requestId, owner))`);
   // Older installations created this table before desiredState was persisted.
   // Keep the worker's status column independent: it can overwrite status with
   // 'error' without losing the last requested action.
-  const columns =
-    datasource.options.type === 'postgres'
-      ? await fanoutQuery(`select column_name as name from information_schema.columns
-          where table_schema = current_schema() and table_name = 'media_fanout_intent'
-          and column_name = 'desiredstate'`)
-      : await fanoutQuery(`select name from pragma_table_info('media_fanout_intent')
-          where name = 'desiredState'`);
-  if (!columns.length) {
-    try {
-      await fanoutQuery(`alter table media_fanout_intent add column
-        desiredState text not null default 'present'`);
-    } catch (error) {
-      // Another concurrent request may have added the same column.
-      const duplicate =
-        (error as { code?: string }).code === '42701' ||
-        /duplicate column name: desiredState/i.test(String(error));
-      if (!duplicate) throw error;
-    }
+  if (
+    await addColumnIfMissing(
+      'desiredState',
+      `desiredState text not null default 'present'`
+    )
+  )
     await fanoutQuery(`update media_fanout_intent set desiredState = 'absent'
       where status = 'remove_pending' and desiredState = 'present'`);
-  }
+  // When the person last asked. The worker rewrites updatedAt on every pass,
+  // so only this says how long a copy has really been waiting.
+  await addColumnIfMissing('requestedAt', 'requestedAt timestamp');
   // First discard obsolete UI rows whose offset key is already occupied, then
   // move the rest. Both statements work on SQLite and PostgreSQL.
   await fanoutQuery(`delete from media_fanout_intent where source = 'seerr-ui'
@@ -152,7 +189,41 @@ type FanoutRow = {
   status: string;
   lastError: string | null;
   desiredState: 'present' | 'absent';
+  source?: string;
+  requestedAt?: string | Date | null;
+  createdAt?: string | Date | null;
+  updatedAt?: string | Date | null;
 };
+
+// SQLite returns CURRENT_TIMESTAMP as 'YYYY-MM-DD HH:MM:SS' in UTC; PostgreSQL returns a Date.
+export function fanoutTime(value: unknown): number | null {
+  if (value instanceof Date) return value.getTime();
+  if (typeof value !== 'string' || !value) return null;
+  const iso = /^\d{4}-\d\d-\d\d \d\d:\d\d:\d\d/.test(value)
+    ? `${value.replace(' ', 'T')}Z`
+    : value;
+  const time = Date.parse(iso);
+  return Number.isNaN(time) ? null : time;
+}
+
+function isoTime(value: unknown): string | null {
+  const time = fanoutTime(value);
+  return time === null ? null : new Date(time).toISOString();
+}
+
+// How long an unfinished add or remove has been waiting since it was asked for.
+export function waitingSeconds(
+  row: Pick<FanoutRow, 'status' | 'requestedAt' | 'createdAt'> | undefined,
+  now = Date.now()
+): number | null {
+  if (
+    !row ||
+    !['pending', 'queued', 'remove_pending'].includes(row.status ?? '')
+  )
+    return null;
+  const since = fanoutTime(row.requestedAt) ?? fanoutTime(row.createdAt);
+  return since === null ? null : Math.max(0, Math.round((now - since) / 1000));
+}
 
 async function context(
   type: MediaType,
@@ -177,7 +248,8 @@ async function rowsFor(
 ): Promise<FanoutRow[]> {
   return fanoutQuery(
     `select id, owner, status, lastError as "lastError",
-      desiredState as "desiredState" from media_fanout_intent
+      desiredState as "desiredState", source, requestedAt as "requestedAt",
+      createdAt as "createdAt", updatedAt as "updatedAt" from media_fanout_intent
     where mediaType = ? and ((? is not null and tmdbId = ?) or (? is not null and tvdbId = ?))
     ${owner ? 'and owner = ?' : ''} order by updatedAt asc, id asc`,
     [
@@ -202,11 +274,15 @@ export async function fanoutStatus(
   const ids = await context(type, tmdbId, tvdbId);
   const rows = await rowsFor(type, ids, resolved);
   const latest = rows.at(-1);
+  const help = await latestHelp(type, ids, resolved);
   return {
     owner: resolved,
     status: latest?.status ?? 'missing',
     desiredState: latest?.desiredState ?? 'present',
     lastError: latest?.lastError ?? null,
+    requestedAt: isoTime(latest?.requestedAt ?? latest?.createdAt),
+    waitingSeconds: waitingSeconds(latest),
+    help: help.get(resolved) ?? null,
     globallyAvailable: ids.media?.status === MediaStatus.AVAILABLE,
     mediaId: ids.media?.id ?? null,
     removable:
@@ -237,12 +313,19 @@ export async function fanoutOwners(
   const ids = await context(type, tmdbId ?? null, tvdbId ?? null);
   const rows = await rowsFor(type, ids);
   const byOwner = new Map(rows.map((row) => [row.owner, row]));
-  return owners.map((u) => ({
-    ...u,
-    status: byOwner.get(u.owner)?.status ?? 'missing',
-    desiredState: byOwner.get(u.owner)?.desiredState ?? 'present',
-    lastError: byOwner.get(u.owner)?.lastError ?? null,
-  }));
+  const help = await latestHelp(type, ids);
+  return owners.map((u) => {
+    const row = byOwner.get(u.owner);
+    return {
+      ...u,
+      status: row?.status ?? 'missing',
+      desiredState: row?.desiredState ?? 'present',
+      lastError: row?.lastError ?? null,
+      requestedAt: isoTime(row?.requestedAt ?? row?.createdAt),
+      waitingSeconds: waitingSeconds(row),
+      help: help.get(u.owner) ?? null,
+    };
+  });
 }
 
 export async function toggleFanout(
@@ -309,7 +392,8 @@ export async function toggleFanout(
     await fanoutQuery(
       `update media_fanout_intent set status = ?, desiredState = ?, lastError = NULL,
       mediaId = coalesce(mediaId, ?), externalServiceId = coalesce(externalServiceId, ?),
-      updatedAt = CURRENT_TIMESTAMP where id in (${rows.map(() => '?').join(',')})`,
+      requestedAt = CURRENT_TIMESTAMP, updatedAt = CURRENT_TIMESTAMP
+      where id in (${rows.map(() => '?').join(',')})`,
       [
         status,
         intent,
@@ -321,13 +405,13 @@ export async function toggleFanout(
   } else {
     await fanoutQuery(
       `insert into media_fanout_intent
-      (requestId,mediaId,mediaType,app,externalServiceId,tmdbId,tvdbId,owner,source,status,desiredState,lastError,updatedAt)
-      values(?,?,?,?,?,?,?,?,?,?,?,NULL,CURRENT_TIMESTAMP)
+      (requestId,mediaId,mediaType,app,externalServiceId,tmdbId,tvdbId,owner,source,status,desiredState,lastError,requestedAt,updatedAt)
+      values(?,?,?,?,?,?,?,?,?,?,?,NULL,CURRENT_TIMESTAMP,CURRENT_TIMESTAMP)
       on conflict(requestId, owner) do update set mediaId=excluded.mediaId, mediaType=excluded.mediaType,
       app=excluded.app, externalServiceId=excluded.externalServiceId, tmdbId=excluded.tmdbId,
       tvdbId=excluded.tvdbId, source=excluded.source, status=excluded.status,
       desiredState=excluded.desiredState,
-      lastError=NULL, updatedAt=CURRENT_TIMESTAMP`,
+      lastError=NULL, requestedAt=CURRENT_TIMESTAMP, updatedAt=CURRENT_TIMESTAMP`,
       [
         requestId,
         ids.media?.id ?? null,
@@ -356,6 +440,317 @@ export async function toggleFanout(
           ? 'cancel-remove'
           : 'add',
   };
+}
+
+// Notify PVIBot. A person presses it when adding a title to a library, or
+// removing it, did not work. Seerr keeps the request in media_fanout_help and
+// sends it, signed for Hermes's seerr-library webhook route, to the n8n relay
+// named in config/levac-notify.json. PVIBot reports back through
+// POST /request/fanout/help/:id/note, and the request button shows what it says.
+
+const HELP_KEEP_SECONDS = 7 * 24 * 3600;
+const HELP_REPEAT_SECONDS = 30 * 60;
+const HELP_NOTES_KEPT = 6;
+
+const NOTIFY_CONFIG_PATH = process.env.CONFIG_DIRECTORY
+  ? `${process.env.CONFIG_DIRECTORY}/levac-notify.json`
+  : path.join(__dirname, '../../config/levac-notify.json');
+
+type NotifyConfig = { url: string; key: string; hermesSecret: string };
+
+function notifyConfig(): NotifyConfig | null {
+  try {
+    const config = JSON.parse(readFileSync(NOTIFY_CONFIG_PATH, 'utf8'));
+    return config?.url && config?.key && config?.hermesSecret ? config : null;
+  } catch {
+    return null;
+  }
+}
+
+type HelpRow = {
+  id: number;
+  owner: string;
+  status: FanoutHelpStatus;
+  sendError: string | null;
+  notes: string | null;
+  createdAt: string | Date;
+  updatedAt: string | Date;
+};
+
+export async function ensureHelpTable(): Promise<void> {
+  const id =
+    datasource.options.type === 'postgres'
+      ? 'integer generated by default as identity primary key'
+      : 'integer primary key autoincrement';
+  await fanoutQuery(`create table if not exists media_fanout_help
+    (id ${id}, mediaType text not null, tmdbId integer, tvdbId integer,
+    owner text not null, userId integer, status text not null default 'sending',
+    sendError text, notes text,
+    createdAt timestamp default CURRENT_TIMESTAMP, updatedAt timestamp default CURRENT_TIMESTAMP)`);
+}
+
+function parseNotes(value: string | null): FanoutHelpNote[] {
+  try {
+    const notes = JSON.parse(value ?? '[]');
+    return Array.isArray(notes) ? notes : [];
+  } catch {
+    return [];
+  }
+}
+
+function helpFrom(row: HelpRow): FanoutHelp {
+  return {
+    id: Number(row.id),
+    status: row.status,
+    createdAt: isoTime(row.createdAt) ?? '',
+    updatedAt: isoTime(row.updatedAt) ?? '',
+    sendError: row.sendError ?? null,
+    notes: parseNotes(row.notes),
+  };
+}
+
+const HELP_COLUMNS = `id, owner, status, sendError as "sendError", notes,
+  createdAt as "createdAt", updatedAt as "updatedAt"`;
+
+// The newest help request per library for a title, from the last week.
+async function latestHelp(
+  type: MediaType,
+  ids: { tmdbId: number | null; tvdbId: number | null },
+  owner?: string
+): Promise<Map<string, FanoutHelp>> {
+  await ensureHelpTable();
+  const rows: HelpRow[] = await fanoutQuery(
+    `select ${HELP_COLUMNS} from media_fanout_help
+    where mediaType = ? and ((? is not null and tmdbId = ?) or (? is not null and tvdbId = ?))
+    ${owner ? 'and owner = ?' : ''} order by id asc`,
+    [
+      type,
+      ids.tmdbId,
+      ids.tmdbId,
+      ids.tvdbId,
+      ids.tvdbId,
+      ...(owner ? [owner] : []),
+    ]
+  );
+  const since = Date.now() - HELP_KEEP_SECONDS * 1000;
+  const latest = new Map<string, FanoutHelp>();
+  for (const row of rows)
+    if ((fanoutTime(row.createdAt) ?? 0) >= since)
+      latest.set(row.owner, helpFrom(row));
+  return latest;
+}
+
+async function helpRow(id: number): Promise<HelpRow | undefined> {
+  const rows: HelpRow[] = await fanoutQuery(
+    `select ${HELP_COLUMNS} from media_fanout_help where id = ?`,
+    [id]
+  );
+  return rows[0];
+}
+
+// Hermes's generic webhook signature: hex HMAC-SHA256 of "<timestamp>.<body>".
+// n8n forwards body byte for byte, so the signature still matches at Hermes.
+export function hermesEnvelope(
+  payload: Record<string, unknown>,
+  secret: string,
+  deliveryId: string,
+  now = Date.now()
+) {
+  const body = JSON.stringify(payload);
+  const timestamp = String(Math.floor(now / 1000));
+  const signature = createHmac('sha256', secret)
+    .update(`${timestamp}.${body}`)
+    .digest('hex');
+  return { body, timestamp, signature, delivery_id: deliveryId };
+}
+
+async function titleFor(type: MediaType, tmdbId: number | null) {
+  if (!tmdbId) return { title: null, year: null };
+  try {
+    const tmdb = new TheMovieDb();
+    if (type === MediaType.MOVIE) {
+      const movie = await tmdb.getMovie({ movieId: tmdbId });
+      return {
+        title: movie.title,
+        year: movie.release_date?.slice(0, 4) || null,
+      };
+    }
+    const show = await tmdb.getTvShow({ tvId: tmdbId });
+    return {
+      title: show.name,
+      year: show.first_air_date?.slice(0, 4) || null,
+    };
+  } catch {
+    return { title: null, year: null };
+  }
+}
+
+export async function requestFanoutHelp(
+  user: User | undefined,
+  requested: string | undefined,
+  type: MediaType,
+  tmdbId: number | null,
+  tvdbId: number | null,
+  clientError?: unknown
+): Promise<{ help: FanoutHelp; repeated: boolean }> {
+  const owner = await resolveOwner(user, requested);
+  const ids = await context(type, tmdbId, tvdbId);
+  const open = (await latestHelp(type, ids, owner)).get(owner);
+  // A second press while PVIBot is already on it returns the same request.
+  if (
+    open &&
+    ['sent', 'investigating', 'resolving'].includes(open.status) &&
+    Date.now() - (fanoutTime(open.createdAt) ?? 0) < HELP_REPEAT_SECONDS * 1000
+  )
+    return { help: open, repeated: true };
+
+  const rows = await rowsFor(type, ids);
+  const row = rows.filter((r) => r.owner === owner).at(-1);
+  const users = await getRepository(User).find();
+  const ownerUser = users.find((u) => currentOwner(u) === owner);
+  const ownerName =
+    ownerUser?.displayName || ownerUser?.username || owner || 'this';
+  const facts = {
+    status: row?.status ?? 'missing',
+    desiredState: row?.desiredState,
+    lastError: row?.lastError ?? null,
+    waitingSeconds: waitingSeconds(row),
+  };
+  const { title, year } = await titleFor(type, ids.tmdbId);
+  const error =
+    typeof clientError === 'string' && clientError.trim()
+      ? clientError.trim().slice(0, 300)
+      : null;
+
+  // Rows from RETURNING on both databases; a bare lastID if TypeORM ever
+  // routes a lowercase insert through sqlite's run().
+  const inserted: unknown = await fanoutQuery(
+    `insert into media_fanout_help (mediaType, tmdbId, tvdbId, owner, userId, status, notes)
+    values (?, ?, ?, ?, ?, 'sending', '[]') returning id`,
+    [type, ids.tmdbId, ids.tvdbId, owner, user?.id ?? null]
+  );
+  const helpId = Number(
+    Array.isArray(inserted) ? (inserted[0] as { id: number })?.id : inserted
+  );
+  if (!Number.isSafeInteger(helpId) || helpId <= 0)
+    throw new FanoutError(500, 'Unable to save the help request.');
+
+  const payload = {
+    event_type: 'seerr_library_help',
+    help_id: helpId,
+    title: title ?? `TMDB ${ids.tmdbId ?? '?'}`,
+    year: year ?? '',
+    media_type: type,
+    tmdb_id: ids.tmdbId,
+    tvdb_id: ids.tvdbId,
+    owner,
+    owner_name: ownerName,
+    wanted: fanoutWants(facts) === 'absent' ? 'remove' : 'add',
+    stage: fanoutStage(facts),
+    shown: fanoutSummary(facts, `${ownerName}'s library`),
+    worker_status: facts.status,
+    worker_error: facts.lastError ?? '',
+    waiting:
+      facts.waitingSeconds === null ? '' : waitedFor(facts.waitingSeconds),
+    asked_by: user?.displayName || user?.username || 'someone',
+    client_error: error ?? '',
+    media: {
+      id: ids.media?.id ?? null,
+      status: ids.media?.status ?? null,
+      ratingKey: ids.media?.ratingKey ?? null,
+    },
+    // Hermes renders a list as JSON and cuts it at 2000 characters.
+    intents: rows.slice(-8).map((r) => ({
+      id: r.id,
+      owner: r.owner,
+      status: r.status,
+      desiredState: r.desiredState,
+      source: r.source,
+      lastError: r.lastError,
+      requestedAt: isoTime(r.requestedAt),
+      updatedAt: isoTime(r.updatedAt),
+    })),
+  };
+
+  let status: FanoutHelpStatus = 'sent';
+  let sendError: string | null = null;
+  const config = notifyConfig();
+  if (!config) {
+    status = 'send_failed';
+    sendError = 'Notify PVIBot is not set up on this server.';
+  } else {
+    try {
+      await axios.post(
+        config.url,
+        {
+          ...payload,
+          hermes: hermesEnvelope(
+            payload,
+            config.hermesSecret,
+            `seerr-help-${helpId}`
+          ),
+        },
+        { headers: { 'X-Seerr-Key': config.key }, timeout: 20000 }
+      );
+    } catch (e) {
+      status = 'send_failed';
+      sendError = 'PVIBot could not be reached.';
+      logger.warn('Notify PVIBot failed', {
+        label: 'Fan-out',
+        helpId,
+        errorMessage: (e as Error).message,
+      });
+    }
+  }
+  await fanoutQuery(
+    `update media_fanout_help set status = ?, sendError = ?, updatedAt = CURRENT_TIMESTAMP
+    where id = ?`,
+    [status, sendError, helpId]
+  );
+  logger.info('Notify PVIBot', {
+    label: 'Fan-out',
+    helpId,
+    owner,
+    mediaType: type,
+    tmdbId: ids.tmdbId,
+    status,
+  });
+  const saved = await helpRow(helpId);
+  if (!saved) throw new FanoutError(500, 'Unable to save the help request.');
+  return { help: helpFrom(saved), repeated: false };
+}
+
+// PVIBot's progress lines. Needs an admin (Seerr's API key counts).
+export async function noteFanoutHelp(
+  user: User | undefined,
+  helpId: number,
+  status: unknown,
+  note: unknown
+): Promise<FanoutHelp> {
+  if (!canManageFanout(user))
+    throw new FanoutError(403, 'Only PVIBot or an admin can report on help.');
+  if (!(FANOUT_HELP_REPORTS as readonly unknown[]).includes(status))
+    throw new FanoutError(
+      400,
+      `status must be one of ${FANOUT_HELP_REPORTS.join(', ')}.`
+    );
+  await ensureHelpTable();
+  const row = await helpRow(helpId);
+  if (!row) throw new FanoutError(404, 'Help request not found.');
+  const text = String(note ?? '')
+    .replace(/\s+/g, ' ')
+    .trim()
+    .slice(0, 200);
+  const notes = parseNotes(row.notes);
+  if (text) notes.push({ at: new Date().toISOString(), text });
+  await fanoutQuery(
+    `update media_fanout_help set status = ?, notes = ?, updatedAt = CURRENT_TIMESTAMP
+    where id = ?`,
+    [status, JSON.stringify(notes.slice(-HELP_NOTES_KEPT)), helpId]
+  );
+  const saved = await helpRow(helpId);
+  if (!saved) throw new FanoutError(404, 'Help request not found.');
+  return helpFrom(saved);
 }
 
 export async function destinationFor(
