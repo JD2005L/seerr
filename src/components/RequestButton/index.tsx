@@ -4,6 +4,7 @@ import useSettings from '@app/hooks/useSettings';
 import { Permission, useUser } from '@app/hooks/useUser';
 import globalMessages from '@app/i18n/globalMessages';
 import defineMessages from '@app/utils/defineMessages';
+import { MenuSeparator } from '@headlessui/react';
 import {
   ArrowDownTrayIcon,
   ArrowPathIcon,
@@ -31,11 +32,13 @@ import { useIntl } from 'react-intl';
 import { mutate } from 'swr';
 import {
   desiredFanoutState,
+  fanoutInLibrary,
   fanoutInProgress,
   fanoutLabel,
   helpLabel,
   libraryName,
   libraryToastView,
+  menuGroups,
   ownerOptions,
   type FanoutOwner,
   type LibraryWatch,
@@ -95,6 +98,8 @@ interface ButtonOption {
   text: string;
   action: () => void;
   svg?: React.ReactNode;
+  // A library the title is already in: listed last, below a separator.
+  added?: boolean;
 }
 
 interface RequestButtonProps {
@@ -634,8 +639,10 @@ const RequestButton = ({
   if (isAvailable && user) {
     const libraryButtons = (key: string, entry: FanoutOwner, label: string) => {
       const name = nameFor(key);
+      const added = fanoutInLibrary(entry);
       buttons.push({
         id: key === SELF ? 'fanout-self' : `fanout-${key}`,
+        added,
         text:
           busy[key] === 'saving'
             ? watched[key]?.wants === 'absent'
@@ -653,6 +660,7 @@ const RequestButton = ({
       if (notify)
         buttons.push({
           id: key === SELF ? 'fanout-help-self' : `fanout-help-${key}`,
+          added,
           text: busy[key] === 'notifying' ? 'Telling PVIBot...' : notify,
           action: () =>
             helpIsOpen(entry.help)
@@ -673,11 +681,21 @@ const RequestButton = ({
     }
   }
 
-  const [buttonOne, ...others] = buttons;
+  const { main: buttonOne, top, added } = menuGroups(buttons);
 
   if (!buttonOne) {
     return null;
   }
+
+  const menuItem = (button: ButtonOption) => (
+    <ButtonWithDropdown.Item
+      onClick={button.action}
+      key={`request-option-${button.id}`}
+    >
+      {button.svg}
+      <span>{button.text}</span>
+    </ButtonWithDropdown.Item>
+  );
 
   return (
     <>
@@ -714,17 +732,15 @@ const RequestButton = ({
         onClick={buttonOne.action}
         className="ml-2"
       >
-        {others && others.length > 0
-          ? others.map((button) => (
-              <ButtonWithDropdown.Item
-                onClick={button.action}
-                key={`request-option-${button.id}`}
-              >
-                {button.svg}
-                <span>{button.text}</span>
-              </ButtonWithDropdown.Item>
-            ))
-          : null}
+        {top.length > 0 || added.length > 0 ? (
+          <>
+            {top.map(menuItem)}
+            {top.length > 0 && added.length > 0 && (
+              <MenuSeparator className="mx-2 my-1 h-px bg-white/30" />
+            )}
+            {added.map(menuItem)}
+          </>
+        ) : null}
       </ButtonWithDropdown>
     </>
   );

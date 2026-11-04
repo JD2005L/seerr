@@ -61,7 +61,15 @@ const ButtonWithDropdown = ({
           >
             {dropdownIcon ? dropdownIcon : <ChevronDownIcon />}
           </MenuButton>
-          <Dropdown.Items dropdownType={buttonType}>{children}</Dropdown.Items>
+          {/* Levac: the request menu can be long (one entry per library), so
+              the page stays scrollable and the menu never outgrows the screen. */}
+          <Dropdown.Items
+            dropdownType={buttonType}
+            modal={false}
+            className="max-h-[75vh] overflow-y-auto"
+          >
+            {children}
+          </Dropdown.Items>
         </span>
       )}
     </Menu>

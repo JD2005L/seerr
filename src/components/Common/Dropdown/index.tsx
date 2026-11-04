@@ -43,6 +43,9 @@ const DropdownItem = ({
 
 type DropdownItemsProps = HTMLAttributes<HTMLDivElement> & {
   dropdownType: 'primary' | 'ghost';
+  // Headless UI's modal menus lock page scrolling while open. Pass false so
+  // the page can still scroll to a menu that runs off the screen.
+  modal?: boolean;
 };
 
 const DropdownItems = ({

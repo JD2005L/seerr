@@ -3,10 +3,12 @@ import assert from 'node:assert/strict';
 import { describe, it } from 'node:test';
 import {
   desiredFanoutState,
+  fanoutInLibrary,
   fanoutLabel,
   helpLabel,
   libraryName,
   libraryToastView,
+  menuGroups,
   ownerOptions,
 } from './fanoutOptions';
 
@@ -96,6 +98,72 @@ it('retries failed removal instead of adding it back', () => {
     ),
     [{ owner: 'friend', label: "Retry Removal from Friend's Library" }]
   );
+});
+
+describe('request menu order', () => {
+  it('counts a library as having the title until a removal finishes', () => {
+    assert.strictEqual(fanoutInLibrary({ status: 'fulfilled' }), true);
+    assert.strictEqual(fanoutInLibrary({ status: 'remove_pending' }), true);
+    assert.strictEqual(
+      fanoutInLibrary({ status: 'error', desiredState: 'absent' }),
+      true
+    );
+    assert.strictEqual(fanoutInLibrary({ status: 'missing' }), false);
+    assert.strictEqual(fanoutInLibrary({ status: 'removed' }), false);
+    assert.strictEqual(fanoutInLibrary({ status: 'pending' }), false);
+    assert.strictEqual(
+      fanoutInLibrary({ status: 'error', desiredState: 'present' }),
+      false
+    );
+  });
+
+  it('puts libraries the title is already in last, below the separator', () => {
+    // The 2026-11-04 report: a long menu ran off the screen with the
+    // "Remove from" entries mixed in among the ones still needing an add.
+    const ids = (options: { id: string }[]) => options.map((o) => o.id);
+    const groups = menuGroups([
+      { id: 'self' },
+      { id: 'self-help' },
+      { id: 'william', added: true },
+      { id: 'maddy' },
+      { id: 'friend', added: true },
+      { id: 'friend-help', added: true },
+    ]);
+    assert.strictEqual(groups.main?.id, 'self');
+    assert.deepStrictEqual(ids(groups.top), ['self-help', 'maddy']);
+    assert.deepStrictEqual(ids(groups.added), [
+      'william',
+      'friend',
+      'friend-help',
+    ]);
+  });
+
+  it('leads with an add when the first library already has the title', () => {
+    const groups = menuGroups([
+      { id: 'self', added: true },
+      { id: 'william' },
+    ]);
+    assert.strictEqual(groups.main?.id, 'william');
+    assert.deepStrictEqual(groups.top, []);
+    assert.deepStrictEqual(
+      groups.added.map((o) => o.id),
+      ['self']
+    );
+  });
+
+  it('keeps the original order when every library has the title', () => {
+    const groups = menuGroups([
+      { id: 'self', added: true },
+      { id: 'william', added: true },
+    ]);
+    assert.strictEqual(groups.main?.id, 'self');
+    assert.deepStrictEqual(groups.top, []);
+    assert.deepStrictEqual(
+      groups.added.map((o) => o.id),
+      ['william']
+    );
+    assert.strictEqual(menuGroups([]).main, undefined);
+  });
 });
 
 describe('Notify PVIBot menu entry', () => {

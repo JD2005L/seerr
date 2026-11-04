@@ -79,6 +79,33 @@ export function fanoutLabel(entry: Facts, library = 'My Library'): string {
   }
 }
 
+// Whether the title is (still) in this library: added, or a removal that has
+// not finished. These go below the separator in the request menu.
+export function fanoutInLibrary(entry: Facts): boolean {
+  const stage = fanoutStage(entry);
+  if (stage === 'done') return true;
+  if (stage === 'none') return false;
+  return fanoutWants(entry) === 'absent';
+}
+
+// Splits the request menu: the first option is the main button, the rest of
+// the not-yet-added options come next, and libraries the title is already in
+// go last, below a separator, so a long menu leads with what still needs doing.
+export function menuGroups<T extends { added?: boolean }>(
+  options: T[]
+): { main: T | undefined; top: T[]; added: T[] } {
+  const ordered = [
+    ...options.filter((option) => !option.added),
+    ...options.filter((option) => option.added),
+  ];
+  const [main, ...rest] = ordered;
+  return {
+    main,
+    top: rest.filter((option) => !option.added),
+    added: rest.filter((option) => option.added),
+  };
+}
+
 // The Notify PVIBot menu entry, when there is something to tell it about.
 export function helpLabel(
   entry: Facts & Pick<FanoutOwner, 'help'>,
