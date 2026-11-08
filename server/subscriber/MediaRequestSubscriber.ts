@@ -730,12 +730,19 @@ export class MediaRequestSubscriber implements EntitySubscriberInterface<MediaRe
           rootFolderPath: rootFolder,
           title: series.name,
           tvdbid: tvdbId,
-          seasons: entity.seasons.map((season) => season.seasonNumber),
+          // Without a search, Sonarr's RSS check could still grab a whole season in the moment
+          // before the Media Pipeline marks the episodes asked for: the seasons go in unwatched
+          // and the pipeline watches just those episodes.
+          seasons: skipSearch
+            ? []
+            : entity.seasons.map((season) => season.seasonNumber),
           seasonFolder: sonarrSettings.enableSeasonFolders,
           seriesType,
           tags,
           monitored: true,
-          monitorNewItems: sonarrSettings.monitorNewItems,
+          monitorNewItems: skipSearch
+            ? 'none'
+            : sonarrSettings.monitorNewItems,
           searchNow: !sonarrSettings.preventSearch && !skipSearch,
         };
 

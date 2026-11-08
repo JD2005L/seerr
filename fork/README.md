@@ -52,7 +52,11 @@ build), and the `watchtower` container (it only watched Seerr).
   `skipSearch: true` goes to Sonarr without Seerr's series search, whatever
   the server's automatic search setting; every other request keeps it. Levac
   TV asks for shows an episode at a time: the Media Pipeline (CT326) then has
-  Sonarr watch only the episodes asked for and searches for those. The flag
+  Sonarr watch only the episodes asked for and searches for those. Its seasons
+  also go to Sonarr unwatched (new shows get `monitorNewItems: none`), so
+  Sonarr's RSS check can't grab a whole season before the pipeline marks the
+  episodes asked for; for a show Sonarr already has, its seasons stay as they
+  were instead of being re-watched. The flag
   is on the entity during creation (the auto-approved hand-off happens in the
   same save) and in the `media_request_nosearch` table for later approvals and
   re-sends. Code: `server/lib/noSearch.ts`, `MediaRequest.request()`,
