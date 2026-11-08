@@ -24,7 +24,9 @@ pnpm_path() {
 case "${1:-}" in
 prepare)
   git fetch -q origin
-  git fetch -q --tags upstream
+  # --force: upstream sometimes moves a preview tag (preview-new-oidc, 2026-11-08), and a plain
+  # fetch refuses to overwrite an existing tag, failing every run.
+  git fetch -q --tags --force upstream
   git checkout -q levac
   git reset -q --hard origin/levac
   git clean -qfdx -e node_modules
