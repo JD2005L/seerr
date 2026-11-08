@@ -27,4 +27,6 @@ export type MediaRequestBody = {
   userId?: number;
   tags?: number[];
   ignoreQuota?: boolean;
+  // Levac: a show handed to Sonarr without searching (see server/lib/noSearch.ts).
+  skipSearch?: boolean;
 };

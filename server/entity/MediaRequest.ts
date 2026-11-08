@@ -6,6 +6,7 @@ import {
 } from '@server/constants/media';
 import { getRepository } from '@server/datasource';
 import type { MediaRequestBody } from '@server/interfaces/api/requestInterfaces';
+import { rememberNoSearch } from '@server/lib/noSearch';
 import notificationManager, { Notification } from '@server/lib/notifications';
 import overrideRules from '@server/lib/overrideRules';
 import { Permission } from '@server/lib/permissions';
@@ -484,9 +485,11 @@ export class MediaRequest {
         ),
         isAutoRequest: options.isAutoRequest ?? false,
         ignoreQuota,
+        skipSearch: requestBody.skipSearch === true,
       });
 
       await requestRepository.save(request);
+      if (request.skipSearch) await rememberNoSearch(request.id);
       return request;
     }
   }
@@ -592,6 +595,10 @@ export class MediaRequest {
 
   @Column({ default: false })
   public ignoreQuota: boolean;
+
+  // Levac: not a column. Set while a show request is created with skipSearch, so the auto-approved
+  // hand-off to Sonarr in this same save skips the search (see server/lib/noSearch.ts).
+  public skipSearch?: boolean;
 
   constructor(init?: Partial<MediaRequest>) {
     Object.assign(this, init);

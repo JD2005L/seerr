@@ -48,6 +48,15 @@ build), and the `watchtower` container (it only watched Seerr).
 - **Request modal.** Root Folder and Tags are hidden (still submitted).
   Regular users see who the request is for as plain text; only admins get the
   Request As picker.
+- **Show requests without a search (`skipSearch`).** A show request made with
+  `skipSearch: true` goes to Sonarr without Seerr's series search, whatever
+  the server's automatic search setting; every other request keeps it. Levac
+  TV asks for shows an episode at a time: the Media Pipeline (CT326) then has
+  Sonarr watch only the episodes asked for and searches for those. The flag
+  is on the entity during creation (the auto-approved hand-off happens in the
+  same save) and in the `media_request_nosearch` table for later approvals and
+  re-sends. Code: `server/lib/noSearch.ts`, `MediaRequest.request()`,
+  `MediaRequestSubscriber.sendToSonarr()`, `seerr-api.yml`.
 - **Quality profile.** A regular user's chosen profile is kept instead of
   being replaced by their override rule (`server/entity/MediaRequest.ts`).
 - API spec entries for the new endpoints (`seerr-api.yml`).

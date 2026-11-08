@@ -17,6 +17,7 @@ import Media from '@server/entity/Media';
 import { MediaRequest } from '@server/entity/MediaRequest';
 import Season from '@server/entity/Season';
 import SeasonRequest from '@server/entity/SeasonRequest';
+import { skipsSearch } from '@server/lib/noSearch';
 import notificationManager, { Notification } from '@server/lib/notifications';
 import { getSettings } from '@server/lib/settings';
 import logger from '@server/logger';
@@ -710,6 +711,19 @@ export class MediaRequestSubscriber implements EntitySubscriberInterface<MediaRe
           }
         }
 
+        // Levac: requests made to be fetched an episode at a time skip the search (noSearch.ts).
+        const skipSearch = await skipsSearch(entity);
+        if (skipSearch) {
+          logger.info(
+            'Sending to Sonarr without a search (episodes asked for one by one)',
+            {
+              label: 'Media Request',
+              requestId: entity.id,
+              mediaId: entity.media.id,
+            }
+          );
+        }
+
         const sonarrSeriesOptions: AddSeriesOptions = {
           profileId: qualityProfile,
           languageProfileId: languageProfile,
@@ -722,7 +736,7 @@ export class MediaRequestSubscriber implements EntitySubscriberInterface<MediaRe
           tags,
           monitored: true,
           monitorNewItems: sonarrSettings.monitorNewItems,
-          searchNow: !sonarrSettings.preventSearch,
+          searchNow: !sonarrSettings.preventSearch && !skipSearch,
         };
 
         // Run entity asynchronously so we don't wait for it on the UI side

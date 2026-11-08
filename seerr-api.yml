@@ -6615,6 +6615,10 @@ paths:
                   type: boolean
                   example: false
                   description: If true, this request will not count against the user's quota. Requires MANAGE_REQUESTS permission.
+                skipSearch:
+                  type: boolean
+                  example: false
+                  description: Shows only. Hand the series to Sonarr without searching, whatever the server's automatic search setting (Levac TV asks for episodes one at a time; the Media Pipeline searches for those).
               required:
                 - mediaType
                 - mediaId
