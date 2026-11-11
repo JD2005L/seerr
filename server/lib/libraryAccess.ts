@@ -299,7 +299,7 @@ export async function libraryIndex(): Promise<LibraryIndex | null> {
   );
 }
 
-async function sharedSections(): Promise<SharedSections | null> {
+export async function sharedSections(): Promise<SharedSections | null> {
   return cached(
     () => sharedCache,
     (c) => (sharedCache = c),
