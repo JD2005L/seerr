@@ -123,7 +123,9 @@ export function rankRecentlyAdded(
   media: Media[]
 ): Media[] {
   const byKey = new Map<string, Media>();
-  for (const m of media) for (const k of titleKeys(m)) byKey.set(k, m);
+  for (const m of media)
+    for (const k of titleKeys({ type: m.mediaType, tmdbId: m.tmdbId, tvdbId: m.tvdbId }))
+      byKey.set(k, m);
   const newest = new Map<number, { media: Media; addedAt: number }>();
   for (const e of index.entries) {
     if (!access.sections.has(e.section)) continue;
@@ -188,7 +190,9 @@ async function loadIndex(): Promise<LibraryIndex> {
           addedAt: item.addedAt ?? 0,
         });
       }
-      if (!page.items.length || offset + page.items.length >= (page.totalSize ?? 0)) break;
+      // Plex leaves totalSize out at times: a short page is the last one.
+      if (page.items.length < 500) break;
+      if (page.totalSize && offset + page.items.length >= page.totalSize) break;
     }
   }
   return { sections, entries };

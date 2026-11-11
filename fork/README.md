@@ -64,6 +64,17 @@ build), and the `watchtower` container (it only watched Seerr).
 - **Quality profile.** A regular user's chosen profile is kept instead of
   being replaced by their override rule (`server/entity/MediaRequest.ts`).
 - API spec entries for the new endpoints (`seerr-api.yml`).
+- **Discover per person.** For anyone who doesn't manage requests, "Recently
+  Added" lists what arrived in the Plex libraries they have (their own plus
+  what Plex shares with them, newest copy first), and "Recent Requests" and
+  the Requests page their own requests plus those going to those libraries
+  (by root folder `/library/<owner>`). The server owner and request managers
+  still see everything. Library contents come from the Plex server and
+  sharing from plex.tv's `shared_servers` list, cached; when Plex can't be
+  reached a person sees only their own requests, never everyone's. Code:
+  `server/lib/libraryAccess.ts`, used by `GET /media?sort=mediaAdded` and
+  `GET /request`. Titles they can't see can still be added to their library
+  with "Add to My Library" (the fan-out above).
 - **Levac TV branding.** `logo_stacked.svg` (login, setup, password reset)
   and `logo_full.svg` (sidebar) are the wordmark from the Levac TV app's
   "Who's watching?" screen (LevacTV `ProfilesScreen.kt`, `Wordmark()`):
