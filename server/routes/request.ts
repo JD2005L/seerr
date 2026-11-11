@@ -34,10 +34,7 @@ import {
   requestFanoutHelp,
   toggleFanout,
 } from '@server/lib/fanout';
-import {
-  libraryAccess,
-  requestOwnerPatterns,
-} from '@server/lib/libraryAccess';
+import { libraryAccess, requestOwnerPatterns } from '@server/lib/libraryAccess';
 import { Permission } from '@server/lib/permissions';
 import { getSettings } from '@server/lib/settings';
 import logger from '@server/logger';
