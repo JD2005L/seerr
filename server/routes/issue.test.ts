@@ -1,18 +1,23 @@
 import assert from 'node:assert/strict';
-import { before, beforeEach, describe, it, mock } from 'node:test';
+import { rmSync } from 'node:fs';
+import { afterEach, before, beforeEach, describe, it, mock } from 'node:test';
 
+import TheMovieDb from '@server/api/themoviedb';
 import { IssueType } from '@server/constants/issue';
 import { MediaStatus, MediaType } from '@server/constants/media';
 import { getRepository } from '@server/datasource';
 import Issue from '@server/entity/Issue';
 import Media from '@server/entity/Media';
 import { User } from '@server/entity/User';
+import { issueRelayInflight, issueRelaySettings } from '@server/lib/issueRelay';
+import { levacEventSender } from '@server/lib/levacEvents';
 import { Permission } from '@server/lib/permissions';
 import { getSettings } from '@server/lib/settings';
 import { checkUser } from '@server/middleware/auth';
 import { IssueCommentSubscriber } from '@server/subscriber/IssueCommentSubscriber';
 import { IssueSubscriber } from '@server/subscriber/IssueSubscriber';
 import { setupTestDb } from '@server/test/db';
+import { NOTIFY_CONFIG, writeNotifyConfig } from '@server/test/notifyConfig';
 import {
   assertNoCredentials,
   seedUserSettings,
@@ -40,6 +45,15 @@ mock.method(
   'sendIssueCommentNotification',
   async () => undefined
 );
+
+// TheMovieDb keeps its methods as instance properties; no network in tests.
+Object.defineProperty(TheMovieDb.prototype, 'getMovie', {
+  get() {
+    return async () => ({ title: 'Test Movie', release_date: '2020-05-01' });
+  },
+  set() {},
+  configurable: true,
+});
 
 let app: Express;
 
@@ -246,5 +260,114 @@ describe('GET /issueComment/:commentId', () => {
     assert.strictEqual(res.body.user.email, 'demo@seerr.dev');
     assert.ok(!('settings' in res.body.user));
     assertNoCredentials(res.body);
+  });
+});
+
+describe('PVIBot relay', () => {
+  const sent: Record<string, unknown>[] = [];
+  const original = { ...levacEventSender };
+  let failing = false;
+
+  beforeEach(async () => {
+    const userRepo = getRepository(User);
+    const friend = await userRepo.findOneOrFail({
+      where: { email: 'demo@seerr.dev' },
+    });
+    friend.permissions = Permission.CREATE_ISSUES;
+    await userRepo.save(friend);
+    sent.length = 0;
+    failing = false;
+    issueRelaySettings.retryDelayMs = 0;
+    levacEventSender.post = async (_url, body) => {
+      sent.push(body as Record<string, unknown>);
+      if (failing) throw new Error('n8n down');
+      return {} as never;
+    };
+  });
+
+  afterEach(() => {
+    Object.assign(levacEventSender, original);
+    rmSync(NOTIFY_CONFIG, { force: true });
+  });
+
+  const flush = () => Promise.all([...issueRelayInflight]);
+
+  it('succeeds and sends nothing when eventsUrl is not set', async () => {
+    rmSync(NOTIFY_CONFIG, { force: true });
+    const media = await seedMedia();
+    const agent = await loginAs('demo@seerr.dev', 'test1234');
+    const res = await agent.post('/issue').send({
+      issueType: IssueType.VIDEO,
+      message: 'Stutters.',
+      mediaId: media.id,
+    });
+    assert.strictEqual(res.status, 201);
+    await flush();
+    assert.strictEqual(sent.length, 0);
+  });
+
+  it('relays created, reporter comments and reopens, not PVIBot or admin comments', async () => {
+    writeNotifyConfig('http://n8n/seerr/issue');
+    const media = await seedMedia();
+    const friend = await loginAs('demo@seerr.dev', 'test1234');
+    const created = await friend.post('/issue').send({
+      issueType: IssueType.AUDIO,
+      message: 'No English audio.',
+      mediaId: media.id,
+    });
+    assert.strictEqual(created.status, 201);
+    await flush();
+    assert.deepStrictEqual(
+      sent.map((e) => [e.action, e.message]),
+      [['created', 'No English audio.']]
+    );
+    assert.strictEqual(sent[0].issue_type, 'audio');
+    assert.strictEqual(sent[0].problem_scope, 'the whole movie');
+
+    const id = created.body.id;
+    sent.length = 0;
+    const admin = await loginAs('admin@seerr.dev', 'test1234');
+    const comment = (agent: typeof admin, message: string) =>
+      agent.post(`/issue/${id}/comment`).send({ message });
+    await comment(admin, 'PVIBot: checking');
+    await comment(admin, 'Admin chat');
+    await comment(friend, 'PVIBot: mine');
+    await flush();
+    assert.strictEqual(sent.length, 0);
+
+    await comment(friend, 'Still bad');
+    await flush();
+    assert.deepStrictEqual(
+      sent.map((e) => [e.action, e.message]),
+      [['comment', 'Still bad']]
+    );
+
+    sent.length = 0;
+    // Opening an already open issue is not a reopen.
+    await admin.post(`/issue/${id}/open`);
+    await flush();
+    assert.strictEqual(sent.length, 0);
+    await admin.post(`/issue/${id}/resolved`);
+    await admin.post(`/issue/${id}/open`);
+    await flush();
+    assert.deepStrictEqual(
+      sent.map((e) => e.action),
+      ['reopened']
+    );
+  });
+
+  it('never fails the request when PVIBot is unreachable', async () => {
+    writeNotifyConfig('http://n8n/seerr/issue');
+    failing = true;
+    const media = await seedMedia();
+    const agent = await loginAs('demo@seerr.dev', 'test1234');
+    const res = await agent.post('/issue').send({
+      issueType: IssueType.VIDEO,
+      message: 'Stutters.',
+      mediaId: media.id,
+    });
+    assert.strictEqual(res.status, 201);
+    await flush();
+    assert.strictEqual(sent.length, 2); // first try and the one retry
   });
 });

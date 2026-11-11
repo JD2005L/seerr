@@ -24,6 +24,8 @@ import { In } from 'typeorm';
 
 export interface LibrarySection {
   key: string;
+  /** Plex library name, e.g. "TV-James"; shown to PVIBot with problem reports. */
+  title?: string;
   owner: string;
 }
 
@@ -194,7 +196,7 @@ async function loadIndex(): Promise<LibraryIndex> {
       .map((l) => ownerFromPath(l.path))
       .find(Boolean);
     if (!owner) continue;
-    sections.push({ key: String(lib.key), owner });
+    sections.push({ key: String(lib.key), title: lib.title, owner });
     const type = lib.type === 'movie' ? MediaType.MOVIE : MediaType.TV;
     for (let offset = 0; ; offset += 500) {
       const page = await plex.getLibraryContents(String(lib.key), {

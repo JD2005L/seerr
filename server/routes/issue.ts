@@ -8,6 +8,7 @@ import type {
   IssueRequestBody,
   IssueResultsResponse,
 } from '@server/interfaces/api/issueInterfaces';
+import { relayIssue } from '@server/lib/issueRelay';
 import { Permission } from '@server/lib/permissions';
 import logger from '@server/logger';
 import { isAuthenticated } from '@server/middleware/auth';
@@ -159,6 +160,7 @@ issueRoutes.post<Record<string, string>, Issue, IssueRequestBody>(
     });
 
     const newIssue = await issueRepository.save(issue);
+    relayIssue('created', newIssue); // Levac fork: the report goes to PVIBot
 
     return res.status(201).json(newIssue);
   }
@@ -312,6 +314,7 @@ issueRoutes.post<{ issueId: string }, Issue, { message: string }>(
       issue.comments = [...issue.comments, comment];
       issue.updatedAt = new Date();
       await issueRepository.save(issue);
+      relayIssue('comment', issue, comment); // Levac fork: reporter comments go to PVIBot
 
       return res.status(200).json(issue);
     } catch (e) {
@@ -368,10 +371,13 @@ issueRoutes.post<{ issueId: string; status: string }, Issue>(
         });
       }
 
+      const wasResolved = issue.status === IssueStatus.RESOLVED; // Levac fork
       issue.status = newStatus;
       issue.modifiedBy = req.user;
 
       await issueRepository.save(issue);
+      if (wasResolved && newStatus === IssueStatus.OPEN)
+        relayIssue('reopened', issue); // Levac fork: PVIBot hears of reopens
 
       return res.status(200).json(issue);
     } catch (e) {

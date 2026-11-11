@@ -94,5 +94,7 @@ if ! wait_ready seerr "$SHA"; then
 fi
 # PVIBot's way to post progress on Notify PVIBot requests (see fork/README.md).
 install -m 755 "$DIR/seerr-help-note" /usr/local/sbin/seerr-help-note
+# PVIBot's way to answer Seerr problem reports (see fork/README.md).
+install -m 755 "$DIR/seerr-issue-note" /usr/local/sbin/seerr-issue-note
 echo "DEPLOY_OK $IMAGE ($SHA)"
 echo "rollback: docker rm -f seerr && docker rename $PREV seerr && docker update --restart unless-stopped seerr && docker start seerr"
