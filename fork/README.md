@@ -29,6 +29,14 @@ build), and the `watchtower` container (it only watched Seerr).
   Code: `server/lib/fanout.ts`, `server/routes/request.ts`,
   `src/components/RequestButton/`, `server/constants/fanout.ts` (stage rules
   and plain-language reasons, shared by the page and the PVIBot message).
+- **"Available" means available to that person.** Seerr's status is global, so
+  a poster showed the green check for a title only in someone else's library.
+  `GET /api/v1/library/mine` (`server/routes/library.ts`) returns the title keys
+  in the Plex sections the person can see (`limited: false` for admins and
+  request managers, or when the library list can't be read). Cards show a sky
+  plus badge and title pages "In another library" with no Play link when the
+  title is available but not in theirs; the green check stays while the list loads. Code: `src/hooks/useMyLibrary.ts`, `StatusBadgeMini`, `StatusBadge`,
+  `TitleCard`.
 - **Library progress and Notify PVIBot.** Each add or removal gets one live
   message that updates in place until it is done, failed, or still waiting
   after 10 minutes, and the menu says where each library stands ("Adding

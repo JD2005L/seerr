@@ -27,6 +27,7 @@ import StatusBadge from '@app/components/StatusBadge';
 import Season from '@app/components/TvDetails/Season';
 import useDeepLinks from '@app/hooks/useDeepLinks';
 import useLocale from '@app/hooks/useLocale';
+import useMyLibrary from '@app/hooks/useMyLibrary'; // Levac fork
 import useSettings from '@app/hooks/useSettings';
 import useToasts from '@app/hooks/useToasts';
 import { Permission, UserType, useUser } from '@app/hooks/useUser';
@@ -180,6 +181,11 @@ const TvDetails = ({ tv }: TvDetailsProps) => {
     iOSPlexUrl4k: data?.mediaInfo?.iOSPlexUrl4k,
   });
 
+  const { inMyLibrary } = useMyLibrary(); // Levac fork
+  const otherLibrary =
+    !!data?.mediaInfo &&
+    !inMyLibrary('tv', data.mediaInfo.tmdbId, data.mediaInfo.tvdbId);
+
   if (!data && !error) {
     return <LoadingSpinner />;
   }
@@ -191,6 +197,7 @@ const TvDetails = ({ tv }: TvDetailsProps) => {
   const mediaLinks: PlayButtonLink[] = [];
 
   if (
+    !otherLibrary && // Levac fork
     plexUrl &&
     hasPermission([Permission.REQUEST, Permission.REQUEST_TV], {
       type: 'or',
@@ -205,6 +212,7 @@ const TvDetails = ({ tv }: TvDetailsProps) => {
 
   if (
     settings.currentSettings.series4kEnabled &&
+    !otherLibrary && // Levac fork
     plexUrl4k &&
     hasPermission([Permission.REQUEST_4K, Permission.REQUEST_4K_TV], {
       type: 'or',
@@ -572,6 +580,7 @@ const TvDetails = ({ tv }: TvDetailsProps) => {
               tmdbId={data.mediaInfo?.tmdbId}
               mediaType="tv"
               plexUrl={plexUrl}
+              otherLibrary={otherLibrary} // Levac fork
               serviceUrl={data.mediaInfo?.serviceUrl}
             />
             {settings.currentSettings.series4kEnabled &&

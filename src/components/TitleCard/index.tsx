@@ -8,6 +8,7 @@ import RequestModal from '@app/components/RequestModal';
 import ErrorCard from '@app/components/TitleCard/ErrorCard';
 import Placeholder from '@app/components/TitleCard/Placeholder';
 import { useIsTouch } from '@app/hooks/useIsTouch';
+import useMyLibrary from '@app/hooks/useMyLibrary'; // Levac fork
 import useToasts from '@app/hooks/useToasts';
 import { Permission, UserType, useUser } from '@app/hooks/useUser';
 import globalMessages from '@app/i18n/globalMessages';
@@ -53,6 +54,7 @@ const messages = defineMessages('components.TitleCard', {
     '<strong>{title}</strong> Removed from watchlist  successfully!',
   watchlistCancel: 'watchlist for <strong>{title}</strong> canceled.',
   watchlistError: 'Something went wrong. Please try again.',
+  otherLibrary: 'In another library: add it to yours',
 });
 
 const TitleCard = ({
@@ -76,6 +78,7 @@ const TitleCard = ({
   const [showDetail, setShowDetail] = useState(false);
   const [showRequestModal, setShowRequestModal] = useState(false);
   const { addToast } = useToasts();
+  const { inMyLibrary } = useMyLibrary(); // Levac fork
   const [toggleWatchlist, setToggleWatchlist] =
     useState<boolean>(!isAddedToWatchlist);
   const [showBlocklistModal, setShowBlocklistModal] = useState(false);
@@ -463,6 +466,13 @@ const TitleCard = ({
                     status={currentStatus}
                     inProgress={inProgress}
                     shrink
+                    otherLibraryLabel={
+                      // Levac fork: available, but not in a library they can see
+                      (mediaType === 'movie' || mediaType === 'tv') &&
+                      !inMyLibrary(mediaType, id)
+                        ? intl.formatMessage(messages.otherLibrary)
+                        : undefined
+                    }
                   />
                 </div>
               </div>

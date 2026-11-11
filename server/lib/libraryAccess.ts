@@ -110,7 +110,7 @@ export function accessFor(
   return { sections, owners };
 }
 
-function titleKeys(e: {
+export function titleKeys(e: {
   type: MediaType;
   tmdbId?: number | null;
   tvdbId?: number | null;
@@ -120,6 +120,19 @@ function titleKeys(e: {
   if (e.type === MediaType.TV && e.tvdbId)
     keys.push(`${e.type}:tvdb:${e.tvdbId}`);
   return keys;
+}
+
+/** Every title key (see titleKeys) for the titles in the sections a person can see. */
+export function accessibleTitleKeys(
+  index: LibraryIndex,
+  access: LibraryAccess
+): string[] {
+  const keys = new Set<string>();
+  for (const e of index.entries) {
+    if (!access.sections.has(e.section)) continue;
+    for (const k of titleKeys(e)) keys.add(k);
+  }
+  return [...keys];
 }
 
 /**

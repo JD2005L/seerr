@@ -19,6 +19,8 @@ const messages = defineMessages('components.StatusBadge', {
   managemedia: 'Manage {mediaType}',
   seasonnumber: 'S{seasonNumber}',
   seasonepisodenumber: 'S{seasonNumber}E{episodeNumber}',
+  otherlibrary: 'In another library',
+  otherlibraryhint: 'In another library: add it to yours',
 });
 
 interface StatusBadgeProps {
@@ -32,6 +34,8 @@ interface StatusBadgeProps {
   mediaType?: 'movie' | 'tv';
   title?: string | string[];
   statusLabelOverride?: string;
+  // Levac fork: available, but only in someone else's library
+  otherLibrary?: boolean;
 }
 
 const StatusBadge = ({
@@ -45,6 +49,7 @@ const StatusBadge = ({
   mediaType,
   title,
   statusLabelOverride,
+  otherLibrary = false,
 }: StatusBadgeProps) => {
   const intl = useIntl();
   const { hasPermission } = useUser();
@@ -153,6 +158,26 @@ const StatusBadge = ({
       }}
     />
   );
+
+  // Levac fork: no Play link and no green "Available" for a title they can't play.
+  if (
+    otherLibrary &&
+    !inProgress &&
+    (status === MediaStatus.AVAILABLE ||
+      status === MediaStatus.PARTIALLY_AVAILABLE)
+  ) {
+    return (
+      <Tooltip content={intl.formatMessage(messages.otherlibraryhint)}>
+        <Badge badgeType="primary" className="!border-sky-500 !bg-sky-500/80">
+          <span data-testid="other-library-status">
+            {intl.formatMessage(is4k ? messages.status4k : messages.status, {
+              status: intl.formatMessage(messages.otherlibrary),
+            })}
+          </span>
+        </Badge>
+      </Tooltip>
+    );
+  }
 
   switch (status) {
     case MediaStatus.AVAILABLE:
