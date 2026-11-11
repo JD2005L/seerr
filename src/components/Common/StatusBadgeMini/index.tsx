@@ -5,6 +5,7 @@ import {
   ClockIcon,
   EyeSlashIcon,
   MinusSmallIcon,
+  PlusIcon,
   TrashIcon,
 } from '@heroicons/react/24/solid';
 import { MediaStatus } from '@server/constants/media';
@@ -15,6 +16,9 @@ interface StatusBadgeMiniProps {
   inProgress?: boolean;
   // Should the badge shrink on mobile to a smaller size? (TitleCard)
   shrink?: boolean;
+  // Levac fork: set (to the hover/screen reader text) when the title is in
+  // someone else's library only: a sky plus instead of the green check.
+  otherLibraryLabel?: string;
 }
 
 const StatusBadgeMini = ({
@@ -22,6 +26,7 @@ const StatusBadgeMini = ({
   is4k = false,
   inProgress = false,
   shrink = false,
+  otherLibraryLabel,
 }: StatusBadgeMiniProps) => {
   const badgeStyle = [
     `rounded-full shadow-md ${
@@ -68,6 +73,17 @@ const StatusBadgeMini = ({
 
   if (inProgress) {
     indicatorIcon = <Spinner />;
+  } else if (
+    otherLibraryLabel &&
+    (status === MediaStatus.AVAILABLE ||
+      status === MediaStatus.PARTIALLY_AVAILABLE)
+  ) {
+    // Levac fork
+    badgeStyle.length = 1;
+    badgeStyle.push('bg-sky-500/80 border-sky-400 ring-sky-400 text-sky-100');
+    indicatorIcon = <PlusIcon />;
+  } else {
+    otherLibraryLabel = undefined;
   }
 
   return (
@@ -75,6 +91,9 @@ const StatusBadgeMini = ({
       className={`relative inline-flex whitespace-nowrap rounded-full border-gray-700 text-xs font-semibold leading-5 ring-gray-700 ${
         shrink ? '' : 'ring-1'
       }`}
+      title={otherLibraryLabel}
+      aria-label={otherLibraryLabel}
+      data-testid={otherLibraryLabel ? 'other-library-badge' : undefined}
     >
       <div className={badgeStyle.join(' ')}>{indicatorIcon}</div>
       {is4k && <span className="pl-1 pr-2 text-gray-200">4K</span>}

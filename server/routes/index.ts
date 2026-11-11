@@ -16,6 +16,7 @@ import deprecatedRoute from '@server/middleware/deprecation';
 import { mapProductionCompany } from '@server/models/Movie';
 import { mapNetwork } from '@server/models/Tv';
 import { mapWatchProviderDetails } from '@server/models/common';
+import libraryRoutes from '@server/routes/library'; // Levac fork
 import overrideRuleRoutes from '@server/routes/overrideRule';
 import settingsRoutes from '@server/routes/settings';
 import watchlistRoutes from '@server/routes/watchlist';
@@ -172,6 +173,7 @@ router.use(
 router.use('/movie', isAuthenticated(), movieRoutes);
 router.use('/tv', isAuthenticated(), tvRoutes);
 router.use('/media', isAuthenticated(), mediaRoutes);
+router.use('/library', isAuthenticated(), libraryRoutes); // Levac fork
 router.use('/person', isAuthenticated(), personRoutes);
 router.use('/collection', isAuthenticated(), collectionRoutes);
 router.use('/service', isAuthenticated(), serviceRoutes);

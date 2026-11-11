@@ -7423,6 +7423,26 @@ paths:
                       $ref: '#/components/schemas/CreditCrew'
                   id:
                     type: number
+  /library/mine:
+    get:
+      summary: Titles in the libraries the signed-in person can see
+      description: limited is false for people who see every library (or when the library list can't be read); otherwise titles holds keys like movie:tmdb:123, tv:tmdb:456 and tv:tvdb:789.
+      tags: [library]
+      security:
+        - cookieAuth: []
+        - apiKey: []
+      responses:
+        '200':
+          description: Library titles
+          content:
+            application/json:
+              schema:
+                type: object
+                properties:
+                  limited: { type: boolean }
+                  titles:
+                    type: array
+                    items: { type: string }
   /media:
     get:
       summary: Get media

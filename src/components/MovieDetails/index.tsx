@@ -24,6 +24,7 @@ import Slider from '@app/components/Slider';
 import StatusBadge from '@app/components/StatusBadge';
 import useDeepLinks from '@app/hooks/useDeepLinks';
 import useLocale from '@app/hooks/useLocale';
+import useMyLibrary from '@app/hooks/useMyLibrary'; // Levac fork
 import useSettings from '@app/hooks/useSettings';
 import useToasts from '@app/hooks/useToasts';
 import { Permission, UserType, useUser } from '@app/hooks/useUser';
@@ -177,6 +178,11 @@ const MovieDetails = ({ movie }: MovieDetailsProps) => {
     iOSPlexUrl4k: data?.mediaInfo?.iOSPlexUrl4k,
   });
 
+  const { inMyLibrary } = useMyLibrary(); // Levac fork
+  const otherLibrary =
+    !!data?.mediaInfo &&
+    !inMyLibrary('movie', data.mediaInfo.tmdbId, undefined);
+
   if (!data && !error) {
     return <LoadingSpinner />;
   }
@@ -189,6 +195,7 @@ const MovieDetails = ({ movie }: MovieDetailsProps) => {
   const mediaLinks: PlayButtonLink[] = [];
 
   if (
+    !otherLibrary && // Levac fork
     plexUrl &&
     hasPermission([Permission.REQUEST, Permission.REQUEST_MOVIE], {
       type: 'or',
@@ -203,6 +210,7 @@ const MovieDetails = ({ movie }: MovieDetailsProps) => {
 
   if (
     settings.currentSettings.movie4kEnabled &&
+    !otherLibrary && // Levac fork
     plexUrl4k &&
     hasPermission([Permission.REQUEST_4K, Permission.REQUEST_4K_MOVIE], {
       type: 'or',
@@ -516,6 +524,7 @@ const MovieDetails = ({ movie }: MovieDetailsProps) => {
               tmdbId={data.mediaInfo?.tmdbId}
               mediaType="movie"
               plexUrl={plexUrl}
+              otherLibrary={otherLibrary} // Levac fork
               serviceUrl={data.mediaInfo?.serviceUrl}
             />
             {settings.currentSettings.movie4kEnabled &&
