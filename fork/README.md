@@ -83,6 +83,21 @@ build), and the `watchtower` container (it only watched Seerr).
   `server/lib/libraryAccess.ts`, used by `GET /media?sort=mediaAdded` and
   `GET /request`. Titles they can't see can still be added to their library
   with "Add to My Library" (the fan-out above).
+- **Real progress on requests.** Seerr's own status says "Processing" for weeks
+  on most family requests. The Media Pipeline service (CT326) knows the real
+  step, so request cards, the Requests page and the movie and TV pages show
+  its plain-English line, a progress bar with speed while downloading or
+  copying, "Expected <date>" for titles not out yet, the problem when there
+  is one and PVIBot's latest note. Nothing is shown for finished, declined,
+  not yet approved or unknown requests. Config:
+  ${'$'}{CONFIG_DIRECTORY}/levac-pipeline.json = {"url": "...", "key": "..."};
+  no file, no extra UI. GET /api/v1/pipeline returns the open requests the
+  caller may see (own, plus libraries they can see, same rule as the request
+  list), from one pipeline fetch shared and cached for 10 seconds (last good
+  copy for 5 minutes if it is down). The page refreshes every 10 seconds
+  while something is moving, every minute otherwise. Code:
+  server/lib/pipelineStatus.ts, server/routes/pipeline.ts,
+  src/components/PipelineStatus/.
 - **Levac TV branding.** `logo_stacked.svg` (login, setup, password reset)
   and `logo_full.svg` (sidebar) are the wordmark from the Levac TV app's
   "Who's watching?" screen (LevacTV `ProfilesScreen.kt`, `Wordmark()`):
