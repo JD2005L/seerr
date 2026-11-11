@@ -42,6 +42,13 @@ build), and the `watchtower` container (it only watched Seerr).
   after 10 minutes, and the menu says where each library stands ("Adding
   to William's Library...", "Retry ..."). For a failed, slow or unsaved
   change the person can press Notify PVIBot. See below.
+- **Problem reports go to PVIBot.** Every new "Report an Issue", a
+  comment from its reporter, and a reopen is sent to PVIBot as a signed
+  `seerr_issue` event (`server/lib/issueRelay.ts`, through `levacEvents.ts`;
+  one retry after a minute; no `eventsUrl` = nothing sent). Comments starting
+  "PVIBot:" are never relayed. PVIBot answers with `seerr-issue-note <id>
+  <comment|resolve> <base64 json>` on CT306 (`fork/seerr-issue-note`,
+  installed by every deploy), so Seerr's own notifications tell the reporter.
 - **Request menu order and scrolling.** Libraries the title is already in go
   last in the request menu, below a separator (`menuGroups` in
   `fanoutOptions.ts`). `Common/ButtonWithDropdown` opens its menu with

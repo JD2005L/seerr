@@ -571,7 +571,8 @@ export function hermesEnvelope(
   return { body, timestamp, signature, delivery_id: deliveryId };
 }
 
-async function titleFor(type: MediaType, tmdbId: number | null) {
+// Levac fork: exported for server/lib/issueRelay.ts.
+export async function titleFor(type: MediaType, tmdbId: number | null) {
   if (!tmdbId) return { title: null, year: null };
   try {
     const tmdb = new TheMovieDb();

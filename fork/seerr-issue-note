@@ -1,0 +1,56 @@
+#!/bin/sh
+# PVIBot's answer on a Seerr problem report, posted to the local Seerr with its
+# own API key. Installed on CT306 as /usr/local/sbin/seerr-issue-note by
+# fork/deploy.sh. Mirrors seerr-help-note.
+#
+#   seerr-issue-note <issue id> <comment|resolve> <base64 of {"message": "..."}>
+#
+# comment: adds the message as a comment, prefixed "PVIBot: " (Seerr's relay
+#   ignores comments that start with it, so PVIBot never answers itself).
+# resolve: adds the message first when it is not empty, then marks the issue
+#   resolved (Seerr then tells the reporter).
+# The body goes in base64 so it survives ssh and pct exec quoting unchanged.
+set -eu
+usage() {
+  echo "usage: seerr-issue-note <issue id> <comment|resolve> <base64 json>" >&2
+  exit 2
+}
+case "${1:-}" in '' | *[!0-9]*) usage ;; esac
+case "${2:-}" in comment | resolve) ;; *) usage ;; esac
+[ -n "${3:-}" ] || usage
+printf '%s' "$3" | base64 -d | docker exec -i seerr node -e '
+const [id, action] = process.argv.slice(1);
+let raw = "";
+process.stdin.on("data", (d) => (raw += d)).on("end", async () => {
+  let message;
+  try {
+    const body = JSON.parse(raw);
+    if (!body || typeof body !== "object" || Array.isArray(body)) throw 0;
+    message = body.message === undefined ? "" : body.message;
+    if (typeof message !== "string") throw 0;
+  } catch {
+    console.error("body must be JSON like {\"message\": \"...\"}");
+    process.exit(2);
+  }
+  message = message.trim().slice(0, 4000);
+  if (action === "comment" && !message) {
+    console.error("comment needs a non-empty message");
+    process.exit(2);
+  }
+  const key = require("/app/config/settings.json").main.apiKey;
+  const call = async (path, body) => {
+    const r = await fetch(`http://127.0.0.1:5055/api/v1/issue/${id}/${path}`, {
+      method: "POST",
+      headers: { "X-Api-Key": key, "Content-Type": "application/json" },
+      body: body && JSON.stringify(body),
+    });
+    console.log(path, r.status, (await r.text()).slice(0, 200));
+    return r.ok;
+  };
+  if (message) {
+    const text = message.startsWith("PVIBot:") ? message : `PVIBot: ${message}`;
+    if (!(await call("comment", { message: text }))) process.exit(1);
+  }
+  if (action === "resolve" && !(await call("resolved"))) process.exit(1);
+  process.exit(0);
+});' "$1" "$2"
