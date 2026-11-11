@@ -64,6 +64,16 @@ build), and the `watchtower` container (it only watched Seerr).
 - **Quality profile.** A regular user's chosen profile is kept instead of
   being replaced by their override rule (`server/entity/MediaRequest.ts`).
 - API spec entries for the new endpoints (`seerr-api.yml`).
+- **Levac TV branding.** Every image that showed the Seerr logo shows the
+  Levac TV house instead (the mark from Levac TV's launcher icon, `#4FC3F7`):
+  `logo_full.svg` (sidebar) and `logo_stacked.svg` (login, setup, password
+  reset) pair it with "Levac TV" in Inter Bold, drawn as outlines; the
+  favicons, home-screen icons, iOS splash screens and missing-poster images
+  carry the house alone, in the old logo's place, size and colour. All of it
+  comes from `fork/branding/brand.py` (how to run it is at its top). If an
+  upstream merge conflicts on one of these files, keep ours, then re-run the
+  script in case upstream added a new size. The background poster rotation
+  is upstream's and untouched.
 
 ## Notify PVIBot
 
