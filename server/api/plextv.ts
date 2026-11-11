@@ -288,6 +288,16 @@ class PlexTvAPI extends ExternalAPI {
     }
   }
 
+  // Levac fork: which libraries the server owner shares with each user
+  // (parsed by server/lib/libraryAccess.ts).
+  public async getSharedServers(machineId: string): Promise<unknown> {
+    const response = await this.axios.get(
+      `/api/servers/${machineId}/shared_servers`,
+      { transformResponse: [], responseType: 'text' }
+    );
+    return xml2js.parseStringPromise(response.data);
+  }
+
   public async getUsers(): Promise<UsersResponse> {
     const response = await this.axios.get('/api/users', {
       transformResponse: [],

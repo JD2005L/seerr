@@ -34,6 +34,10 @@ import {
   requestFanoutHelp,
   toggleFanout,
 } from '@server/lib/fanout';
+import {
+  libraryAccess,
+  requestOwnerPatterns,
+} from '@server/lib/libraryAccess';
 import { Permission } from '@server/lib/permissions';
 import { getSettings } from '@server/lib/settings';
 import logger from '@server/logger';
@@ -45,6 +49,7 @@ import requestLock, {
   userKey,
 } from '@server/utils/requestLock';
 import { Router } from 'express';
+import { Brackets } from 'typeorm';
 
 const requestRoutes = Router();
 
@@ -296,6 +301,25 @@ requestRoutes.get<Record<string, unknown>, RequestResultsResponse>(
         query = query.andWhere('requestedBy.id = :id', {
           id: requestedBy,
         });
+      }
+
+      // Levac fork: their own requests and those for libraries they can see on
+      // Plex, by the request's root folder (server/lib/libraryAccess.ts).
+      const access = await libraryAccess(req.user);
+      if (access) {
+        const roots = requestOwnerPatterns(access.owners);
+        query = query.andWhere(
+          new Brackets((qb) => {
+            qb.where('requestedBy.id = :libraryViewer', {
+              libraryViewer: req.user?.id,
+            });
+            roots.forEach((root, i) =>
+              qb.orWhere(`LOWER(request.rootFolder) LIKE :libraryRoot${i}`, {
+                [`libraryRoot${i}`]: root,
+              })
+            );
+          })
+        );
       }
 
       switch (mediaType) {

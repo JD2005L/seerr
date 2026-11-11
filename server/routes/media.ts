@@ -11,6 +11,7 @@ import type {
   MediaResultsResponse,
   MediaWatchDataResponse,
 } from '@server/interfaces/api/mediaInterfaces';
+import { libraryAccess, recentlyAddedFor } from '@server/lib/libraryAccess';
 import { Permission } from '@server/lib/permissions';
 import { getSettings } from '@server/lib/settings';
 import logger from '@server/logger';
@@ -75,6 +76,28 @@ mediaRoutes.get('/', async (req, res, next) => {
   }
 
   try {
+    // Levac fork: "Recently Added" shows what arrived in the Plex libraries the
+    // person has, not every library (server/lib/libraryAccess.ts).
+    if (req.query.sort === 'mediaAdded') {
+      const access = await libraryAccess(req.user);
+      if (access) {
+        const { total, results } = await recentlyAddedFor(
+          access,
+          pageSize,
+          skip
+        );
+        return res.status(200).json({
+          pageInfo: {
+            pages: Math.ceil(total / pageSize),
+            pageSize,
+            results: total,
+            page: Math.ceil(skip / pageSize) + 1,
+          },
+          results,
+        } as MediaResultsResponse);
+      }
+    }
+
     const [media, mediaCount] = await mediaRepository.findAndCount({
       order: sortFilter,
       where: whereClause,

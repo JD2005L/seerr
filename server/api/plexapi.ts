@@ -41,6 +41,8 @@ export interface PlexLibrary {
   key: string;
   title: string;
   agent: string;
+  // Levac fork: folders, which name whose library it is (server/lib/libraryAccess.ts).
+  Location?: { id: number; path: string }[];
 }
 
 interface PlexLibrariesResponse {
