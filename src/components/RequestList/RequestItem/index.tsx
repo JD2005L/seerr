@@ -3,6 +3,7 @@ import Badge from '@app/components/Common/Badge';
 import Button from '@app/components/Common/Button';
 import CachedImage from '@app/components/Common/CachedImage';
 import ConfirmButton from '@app/components/Common/ConfirmButton';
+import PipelineStatus from '@app/components/PipelineStatus'; // Levac fork
 import RequestModal from '@app/components/RequestModal';
 import StatusBadge from '@app/components/StatusBadge';
 import useDeepLinks from '@app/hooks/useDeepLinks';
@@ -562,6 +563,8 @@ const RequestItem = ({ request, revalidateList }: RequestItemProps) => {
                 />
               )}
             </div>
+            {/* Levac fork: real progress from the Media Pipeline */}
+            <PipelineStatus requestId={requestData.id} />
             <div className="card-field">
               {hasPermission(
                 [Permission.MANAGE_REQUESTS, Permission.REQUEST_VIEW],

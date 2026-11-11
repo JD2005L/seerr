@@ -3,6 +3,7 @@ import Badge from '@app/components/Common/Badge';
 import Button from '@app/components/Common/Button';
 import CachedImage from '@app/components/Common/CachedImage';
 import Tooltip from '@app/components/Common/Tooltip';
+import PipelineStatus from '@app/components/PipelineStatus'; // Levac fork
 import RequestModal from '@app/components/RequestModal';
 import StatusBadge from '@app/components/StatusBadge';
 import useDeepLinks from '@app/hooks/useDeepLinks';
@@ -477,6 +478,8 @@ const RequestCard = ({ request, onTitleData }: RequestCardProps) => {
               />
             )}
           </div>
+          {/* Levac fork: real progress from the Media Pipeline */}
+          <PipelineStatus requestId={requestData.id} />
           <div className="flex flex-1 items-end space-x-2">
             {requestData.status === MediaRequestStatus.FAILED &&
               hasPermission(Permission.MANAGE_REQUESTS) && (

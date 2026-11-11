@@ -6653,6 +6653,32 @@ paths:
         '400': { description: Invalid input }
         '403': { description: Permission denied }
         '404': { description: No mapping }
+  /pipeline:
+    get:
+      summary: Real progress of open requests from the Media Pipeline
+      description: Levac fork. Open, approved requests the caller can see, with the pipeline's plain-English step. available is false when the pipeline is not configured or unreachable.
+      tags: [request]
+      parameters:
+        - in: query
+          name: requestIds
+          description: Comma separated request IDs to narrow the list
+          schema: { type: string }
+      security:
+        - cookieAuth: []
+        - apiKey: []
+      responses:
+        '200':
+          description: Pipeline statuses
+          content:
+            application/json:
+              schema:
+                type: object
+                properties:
+                  available: { type: boolean }
+                  stale: { type: boolean }
+                  statuses:
+                    type: array
+                    items: { type: object }
   /request/fanout/owners:
     get:
       summary: List library owners with optional title status

@@ -37,6 +37,7 @@ import issueCommentRoutes from './issueComment';
 import mediaRoutes from './media';
 import movieRoutes from './movie';
 import personRoutes from './person';
+import pipelineRoutes from './pipeline'; // Levac fork: pipeline status
 import requestRoutes from './request';
 import searchRoutes from './search';
 import serviceRoutes from './service';
@@ -169,6 +170,7 @@ router.use(
   }),
   blocklistRoutes
 );
+router.use('/pipeline', isAuthenticated(), pipelineRoutes); // Levac fork: pipeline status
 router.use('/movie', isAuthenticated(), movieRoutes);
 router.use('/tv', isAuthenticated(), tvRoutes);
 router.use('/media', isAuthenticated(), mediaRoutes);

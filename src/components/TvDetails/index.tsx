@@ -20,6 +20,7 @@ import IssueModal from '@app/components/IssueModal';
 import ManageSlideOver from '@app/components/ManageSlideOver';
 import MediaSlider from '@app/components/MediaSlider';
 import PersonCard from '@app/components/PersonCard';
+import { PipelineStatusLines } from '@app/components/PipelineStatus'; // Levac fork
 import RequestButton from '@app/components/RequestButton';
 import RequestModal from '@app/components/RequestModal';
 import Slider from '@app/components/Slider';
@@ -620,6 +621,10 @@ const TvDetails = ({ tv }: TvDetailsProps) => {
                   </Fragment>
                 ))}
           </span>
+          {/* Levac fork: real progress from the Media Pipeline */}
+          <PipelineStatusLines
+            requestIds={(data.mediaInfo?.requests ?? []).map((r) => r.id)}
+          />
         </div>
         <div className="media-actions">
           {showHideButton &&
