@@ -69,6 +69,16 @@ build), and the `watchtower` container (it only watched Seerr).
   same save) and in the `media_request_nosearch` table for later approvals and
   re-sends. Code: `server/lib/noSearch.ts`, `MediaRequest.request()`,
   `MediaRequestSubscriber.sendToSonarr()`, `seerr-api.yml`.
+- **New people set up automatically.** On startup, every 15 minutes and
+  after a Plex sign-in creates or links a user, Seerr enables every
+  per-person Plex library, and for each Plex user with no override rule finds
+  their library owner (their username, or the library Plex shares with them),
+  sets an empty username to it, and adds the Radarr and Sonarr override rules
+  (root folder, profile, owner tag; the tag is created if missing). It never
+  edits rules, disables libraries or changes permissions. A person it cannot
+  finish is sent to PVIBot as `needs_james`, and each outcome is sent once
+  (`user_setup_notice`). Code: `server/lib/userSetup.ts`, `server/routes/auth.ts`,
+  `server/index.ts`.
 - **Quality profile.** A regular user's chosen profile is kept instead of
   being replaced by their override rule (`server/entity/MediaRequest.ts`).
 - API spec entries for the new endpoints (`seerr-api.yml`).

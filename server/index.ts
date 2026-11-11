@@ -19,6 +19,7 @@ import WebhookAgent from '@server/lib/notifications/agents/webhook';
 import WebPushAgent from '@server/lib/notifications/agents/webpush';
 import checkOverseerrMerge from '@server/lib/overseerrMerge';
 import { getSettings } from '@server/lib/settings';
+import { startUserSetup } from '@server/lib/userSetup';
 import logger from '@server/logger';
 import clearCookies from '@server/middleware/clearcookies';
 import routes from '@server/routes';
@@ -163,6 +164,9 @@ app
         }
       );
     }
+
+    // Levac fork: set new people up (libraries, override rules, username).
+    startUserSetup();
 
     // Bootstrap Discovery Sliders
     await DiscoverSlider.bootstrapSliders();

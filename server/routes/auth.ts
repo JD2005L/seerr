@@ -8,6 +8,7 @@ import { User } from '@server/entity/User';
 import { startJobs } from '@server/job/schedule';
 import { Permission } from '@server/lib/permissions';
 import { getSettings } from '@server/lib/settings';
+import { triggerUserSetup } from '@server/lib/userSetup';
 import logger from '@server/logger';
 import { isAuthenticated } from '@server/middleware/auth';
 import { checkAvatarChanged } from '@server/routes/avatarproxy';
@@ -156,6 +157,7 @@ authRoutes.post('/plex', async (req, res, next) => {
             );
           }
 
+          const newlyLinked = !user.plexId;
           user.plexToken = body.authToken;
           user.plexId = account.id;
           user.avatar = account.thumb;
@@ -164,6 +166,8 @@ authRoutes.post('/plex', async (req, res, next) => {
           user.userType = UserType.PLEX;
 
           await userRepository.save(user);
+          // Levac fork: set a newly linked person up (never blocks sign-in).
+          if (newlyLinked) triggerUserSetup();
         } else if (!settings.main.newPlexLogin) {
           logger.warn(
             'Failed sign-in attempt by unimported Plex user with access to the media server',
@@ -201,6 +205,8 @@ authRoutes.post('/plex', async (req, res, next) => {
           });
 
           await userRepository.save(user);
+          // Levac fork: set the new person up (never blocks sign-in).
+          triggerUserSetup();
         }
       } else {
         logger.warn(
