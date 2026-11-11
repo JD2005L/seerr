@@ -89,6 +89,7 @@ build), and the `watchtower` container (it only watched Seerr).
   case upstream added a new size. The background poster rotation is
   upstream's and untouched. These files reach the image because `build.sh`
   bundles `public/` and the Dockerfile copies it over upstream's.
+- **Ask to turn on notifications.** Right after a successful request or `Add to My Library`, a small prompt offers to turn on Web Push for this device (reusing upstream's `pushSubscriptionHelpers`). It shows only when push is supported, permission is undecided and the device has no subscription, and `Not now` hides it for 30 days. If permission is already granted it subscribes quietly. On iPhone/iPad outside the Home Screen app it explains how to add the site instead. A response interceptor spots the successful requests, so the request modals are untouched. Code: `src/components/NotifyPrompt/` (`decide.ts` holds the tested decision), mounted in `Layout`.
 
 ## Notify PVIBot
 
