@@ -40,6 +40,17 @@ const read = (q) => call('/api/v1/request/fanout/status?' + q);
   )
     fail('wrong candidate identity: ' + JSON.stringify(status.data));
 
+  // Our public/ files (Levac TV branding) must be the ones served: until
+  // 2026-11-10 the image took public/ from upstream and nothing noticed.
+  if (!process.env.EXPECT_LOGO_SHA) fail('bundle has no public/ files');
+  const logo = await fetch(base + '/logo_stacked.svg');
+  const logoSha = require('crypto')
+    .createHash('sha256')
+    .update(Buffer.from(await logo.arrayBuffer()))
+    .digest('hex');
+  if (logo.status !== 200 || logoSha !== process.env.EXPECT_LOGO_SHA)
+    fail('candidate serves upstream public/ files, not ours');
+
   const mapped = await call(
     '/api/v1/request/destination?mediaType=movie&userId=7'
   );

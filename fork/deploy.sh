@@ -57,7 +57,8 @@ if ! wait_ready "seerr-smoke-$SHORT" "$SHA"; then
   exit 1
 fi
 docker cp "$DIR/smoke.js" "seerr-smoke-$SHORT:/tmp/smoke.js"
-if ! docker exec -e EXPECT_COMMIT="$SHA" "seerr-smoke-$SHORT" node /tmp/smoke.js; then
+LOGO_SHA=$(sha256sum "$DIR/public/logo_stacked.svg" 2>/dev/null | cut -d' ' -f1)
+if ! docker exec -e EXPECT_COMMIT="$SHA" -e EXPECT_LOGO_SHA="$LOGO_SHA" "seerr-smoke-$SHORT" node /tmp/smoke.js; then
   docker rm -f "seerr-smoke-$SHORT" >/dev/null
   exit 1
 fi

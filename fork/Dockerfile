@@ -1,6 +1,8 @@
-# Our build on top of the matching upstream release image. Only the compiled
-# app (.next, dist) and the API spec change; node_modules come from upstream,
-# which is why build.sh checks that our dependencies match UPSTREAM_TAG.
+# Our build on top of the matching upstream release image. The compiled app
+# (.next, dist), the API spec and our public/ files (Levac TV branding) change;
+# node_modules come from upstream, which is why build.sh checks that our
+# dependencies match UPSTREAM_TAG. public/ is copied over upstream's, so a file
+# only upstream's image has stays.
 ARG BASE_IMAGE
 FROM ${BASE_IMAGE}
 ARG SOURCE_COMMIT
@@ -10,6 +12,7 @@ RUN rm -rf /app/.next /app/dist
 COPY --chown=node:node .next /app/.next
 COPY --chown=node:node dist /app/dist
 COPY --chown=node:node seerr-api.yml /app/seerr-api.yml
+COPY --chown=node:node public /app/public
 RUN printf '{"commitTag":"%s"}\n' "${SOURCE_COMMIT}" > /app/committag.json \
   && chown node:node /app/committag.json
 USER node
