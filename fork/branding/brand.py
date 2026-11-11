@@ -1,359 +1,278 @@
 """Levac TV branding for the Seerr fork (see fork/README.md, "Levac TV branding").
 
-Usage: python -I brand.py <seerr public dir (read)> <font woff2> <out dir>
+Usage: python -I brand.py <seerr public dir> <Levac TV app Inter.ttf> <out dir>
 
-Writes replacements for every Seerr-logo asset into <out dir>, mirroring the
-public/ layout, plus preview PNGs under <out dir>/_preview. Reads the images in
-public/ only to copy their size, background and logo position, so it can be
-re-run on its own output (or on new upstream sizes); then copy <out dir> over
-public/, leaving _preview out.
+- logo_stacked.svg (login, setup, password reset) and logo_full.svg (sidebar): the wordmark
+  from the Levac TV app's "Who's watching?" screen (LevacTV ProfilesScreen.kt, Wordmark()),
+  reproduced from its numbers: "LEVAC" Inter Black 50 with 9 letter spacing and a white to
+  #B9C4DA gradient, 6 gap, then a "TV" badge (Inter Black 34, spacing 1, black at 82%) on a
+  Sky accent gradient (#4FC3F7 to 72%), 12/3 padding, radius 12, with a radial glow as wide
+  as the badge. Units are the app's dp/sp, so the login logo is the TV's size in CSS px.
+- favicons, apple-touch-icon, android-chrome icons: the app's launcher house on its dark
+  tile, drawn with depth (side, bevel, gloss, play button set in, glow and shadow under it).
+- apple-splash-*.jpg: the wordmark centred on each image's own background.
+- images/seerr_poster_not_found*.png: a flat muted house where the old logo was.
+Reads public/ only for sizes, backgrounds and logo positions, so it can be re-run on its own
+output; copy <out dir> over public/ (leave _preview out).
 
 Setup (2026-11-10 used Python 3.13):
-  python -m venv venv && venv/bin/pip install pillow fonttools brotli uharfbuzz skia-pathops
-  curl -fLo inter-bold.woff2 \
-    https://cdn.jsdelivr.net/npm/@fontsource/inter@5.0.8/files/inter-latin-700-normal.woff2
-Inter is SIL Open Font License; the logos carry its outlines, not the font.
+  python -m venv venv && venv/bin/pip install pillow fonttools uharfbuzz skia-pathops resvg-py
+The font is the app's own (LevacTV app/src/main/assets/fonts/Inter.ttf, Inter 4.001 variable,
+SIL Open Font License); the logos carry its outlines at weight 900, not the font.
 """
 import io
+import math
 import os
 import sys
 
+import resvg_py
 import uharfbuzz as hb
-from fontTools.pens.basePen import BasePen
 from fontTools.pens.svgPathPen import SVGPathPen
 from fontTools.pens.transformPen import TransformPen
 from fontTools.ttLib import TTFont
-from PIL import Image, ImageChops, ImageDraw
+from fontTools.ttLib.removeOverlaps import removeOverlaps
+from fontTools.varLib.instancer import instantiateVariableFont
+from PIL import Image, ImageChops
 
 PUBLIC, FONT, OUT = sys.argv[1:4]
-ACCENT = "#4FC3F7"      # Levac TV accent (house)
-DARK = "#0B0D10"        # Levac TV icon background
-TEXT = "#F9FAFB"        # Seerr gray-50, the colour of its own wordmark
-WORD = "Levac TV"
-SS = 4                  # supersampling for rasters
-
-# The Levac TV mark, from LevacTV app/src/main/res/drawable/ic_launcher.xml (108 viewport),
-# moved so its bounding box starts at 0,0: 72 wide, 68 tall.
-HOUSE = [(54, 20), (90, 52), (80, 52), (80, 88), (28, 88), (28, 52), (18, 52)]
-PLAY = [(47, 58), (47, 80), (65, 69)]
-HOUSE = [(x - 18, y - 20) for x, y in HOUSE]
-PLAY = [(x - 18, y - 20) for x, y in PLAY]
-MW, MH = 72.0, 68.0
-WALL_TOP = 52 - 20        # where the house's walls start under the roof
+ACCENT = "#4FC3F7"   # the app's default accent (Palette.accents[0], "Sky")
 
 
-def num(v: float) -> str:
+def num(v):
     s = f"{v:.2f}".rstrip("0").rstrip(".")
-    return "0" if s == "-0" else s
+    return "0" if s in ("-0", "") else s
 
 
-# ---------- font ----------
-tt = TTFont(FONT)
-tt.flavor = None
-# Inter keeps overlapping outlines (its 'e' crossbar runs into the stem); merge them so the
-# logo paths have no self-overlaps under any fill rule.
-from fontTools.ttLib.removeOverlaps import removeOverlaps  # noqa: E402
-removeOverlaps(tt, [tt.getBestCmap()[ord(c)] for c in set(WORD) if c != " "])
-buf = io.BytesIO()
-tt.save(buf)
-tt = TTFont(io.BytesIO(buf.getvalue()))
+# ---------------- font: the app's Inter at FontWeight.Black ----------------
+tt = instantiateVariableFont(TTFont(FONT), {"wght": 900, "opsz": 14})
+removeOverlaps(tt, sorted({tt.getBestCmap()[ord(c)] for c in "LEVACTV"}))
+_buf = io.BytesIO()
+tt.save(_buf)
+tt = TTFont(io.BytesIO(_buf.getvalue()))
 UPM = tt["head"].unitsPerEm
-CAP = tt["OS/2"].sCapHeight
+ASC, DESC = tt["hhea"].ascent, -tt["hhea"].descent
 GS = tt.getGlyphSet()
 ORDER = tt.getGlyphOrder()
-
-hbfont = hb.Font(hb.Face(buf.getvalue()))
-hbbuf = hb.Buffer()
-hbbuf.add_str(WORD)
-hbbuf.guess_segment_properties()
-hb.shape(hbfont, hbbuf, {"kern": True, "liga": True})
-GLYPHS = [(ORDER[i.codepoint], p.x_offset, p.x_advance) for i, p in zip(hbbuf.glyph_infos, hbbuf.glyph_positions)]
-WORD_UNITS = sum(a for _, _, a in GLYPHS)
-# Ink extent of the first and last glyph, so the word sits flush where its letters start/end.
-LSB = tt["hmtx"][GLYPHS[0][0]][1]
-last_name = GLYPHS[-1][0]
-last_glyf = tt["glyf"][last_name]
-last_glyf.recalcBounds(tt["glyf"])
-RSB = tt["hmtx"][last_name][0] - last_glyf.xMax
+HBF = hb.Font(hb.Face(_buf.getvalue()))
 
 
-def word_width(cap_px: float) -> float:
-    s = cap_px / CAP
-    return (WORD_UNITS - LSB - RSB) * s
-
-
-def word_svg(x: float, baseline: float, cap_px: float) -> str:
-    s = cap_px / CAP
+def text_run(text, x, top, size, spacing):
+    """Android/Compose layout: each glyph gets `spacing` extra, half before and half after.
+    Returns (svg path, box width, box height) for a text box whose top-left is x, top."""
+    b = hb.Buffer()
+    b.add_str(text)
+    b.guess_segment_properties()
+    hb.shape(HBF, b, {"kern": True})
+    s = size / UPM
     pen = SVGPathPen(GS, ntos=num)
-    pos = -LSB
-    for name, xoff, adv in GLYPHS:
-        GS[name].draw(TransformPen(pen, (s, 0, 0, -s, x + (pos + xoff) * s, baseline)))
-        pos += adv
-    return pen.getCommands()
+    pos = 0.0
+    for info, p in zip(b.glyph_infos, b.glyph_positions):
+        gx = x + pos + spacing / 2 + p.x_offset * s
+        GS[ORDER[info.codepoint]].draw(TransformPen(pen, (s, 0, 0, -s, gx, top + ASC * s)))
+        pos += p.x_advance * s + spacing
+    return pen.getCommands(), pos, (ASC + DESC) * s
 
 
-class FlatPen(BasePen):
-    """Glyph outlines as flattened polygons (for raster previews)."""
-
-    def __init__(self, gs, tf):
-        super().__init__(gs)
-        self.tf, self.polys, self.cur = tf, [], []
-
-    def _pt(self, p):
-        a, b, c, d, e, f = self.tf
-        return (a * p[0] + c * p[1] + e, b * p[0] + d * p[1] + f)
-
-    def _moveTo(self, p):
-        self.cur = [self._pt(p)]
-
-    def _lineTo(self, p):
-        self.cur.append(self._pt(p))
-
-    def _curveToOne(self, p1, p2, p3):
-        p0 = self._getCurrentPoint()
-        for i in range(1, 13):
-            t = i / 12
-            mt = 1 - t
-            x = mt**3 * p0[0] + 3 * mt * mt * t * p1[0] + 3 * mt * t * t * p2[0] + t**3 * p3[0]
-            y = mt**3 * p0[1] + 3 * mt * mt * t * p1[1] + 3 * mt * t * t * p2[1] + t**3 * p3[1]
-            self.cur.append(self._pt((x, y)))
-
-    def _qCurveToOne(self, p1, p2):
-        p0 = self._getCurrentPoint()
-        for i in range(1, 9):
-            t = i / 8
-            mt = 1 - t
-            x = mt * mt * p0[0] + 2 * mt * t * p1[0] + t * t * p2[0]
-            y = mt * mt * p0[1] + 2 * mt * t * p1[1] + t * t * p2[1]
-            self.cur.append(self._pt((x, y)))
-
-    def _closePath(self):
-        if len(self.cur) > 2:
-            self.polys.append(self.cur)
-        self.cur = []
-
-    _endPath = _closePath
+# ---------------- the wordmark ----------------
+def wordmark(uid):
+    levac, w1, h1 = text_run("LEVAC", 0, 0, 50, 9)
+    gap = 6
+    _, tvw, tvh = text_run("TV", 0, 0, 34, 1)
+    bw, bh = tvw + 24, tvh + 6
+    H = max(h1, bh)
+    ly = (H - h1) / 2
+    levac, _, _ = text_run("LEVAC", 0, ly, 50, 9)
+    bx, by = w1 + gap, (H - bh) / 2
+    tv, _, _ = text_run("TV", bx + 12, by + 3, 34, 1)
+    cx, cy, r = bx + bw / 2, by + bh / 2, max(bw, bh)
+    d = f"""<linearGradient id="lv{uid}" gradientUnits="userSpaceOnUse" x1="0" y1="{num(ly)}" x2="0" y2="{num(ly + h1)}">
+<stop offset="0" stop-color="#FFFFFF"/><stop offset="1" stop-color="#B9C4DA"/></linearGradient>
+<linearGradient id="bd{uid}" gradientUnits="userSpaceOnUse" x1="{num(bx)}" y1="{num(by)}" x2="{num(bx + bw)}" y2="{num(by + bh)}">
+<stop offset="0" stop-color="{ACCENT}"/><stop offset="1" stop-color="{ACCENT}" stop-opacity="0.72"/></linearGradient>
+<radialGradient id="gw{uid}" gradientUnits="userSpaceOnUse" cx="{num(cx)}" cy="{num(cy)}" r="{num(r)}">
+<stop offset="0" stop-color="{ACCENT}" stop-opacity="0.45"/><stop offset="1" stop-color="{ACCENT}" stop-opacity="0"/></radialGradient>"""
+    body = (f'<circle cx="{num(cx)}" cy="{num(cy)}" r="{num(r)}" fill="url(#gw{uid})"/>\n'
+            f'<path d="{levac}" fill="url(#lv{uid})"/>\n'
+            f'<rect x="{num(bx)}" y="{num(by)}" width="{num(bw)}" height="{num(bh)}" rx="12" fill="url(#bd{uid})"/>\n'
+            f'<path d="{tv}" fill="#000000" fill-opacity="0.82"/>')
+    return d, body, bx + bw, H
 
 
-def word_polys(x: float, baseline: float, cap_px: float):
-    s = cap_px / CAP
-    out, pos = [], -LSB
-    for name, xoff, adv in GLYPHS:
-        pen = FlatPen(GS, (s, 0, 0, -s, x + (pos + xoff) * s, baseline))
-        GS[name].draw(pen)
-        out.append(pen.polys)
-        pos += adv
-    return out  # one list of contours per glyph
+def wordmark_svg(uid, box_w, box_h, art_w):
+    """The wordmark centred in a viewBox with the container's aspect, drawn art_w px wide."""
+    d, body, W, H = wordmark(uid)
+    su = W / art_w
+    vw, vh = box_w * su, box_h * su
+    ox, oy = (vw - W) / 2, (vh - H) / 2
+    return (f'<svg width="{num(vw)}" height="{num(vh)}" viewBox="0 0 {num(vw)} {num(vh)}" fill="none" '
+            f'xmlns="http://www.w3.org/2000/svg">\n<defs>\n{d}\n</defs>\n'
+            f'<g transform="translate({num(ox)} {num(oy)})">\n{body}\n</g>\n</svg>\n')
 
 
-# ---------- mark ----------
-def mark_path(x: float, y: float, h: float) -> str:
-    s = h / MH
-    def sub(pts):
-        return "M" + " L".join(f"{num(x + px * s)} {num(y + py * s)}" for px, py in pts) + " Z"
-    return sub(HOUSE) + " " + sub(PLAY)
+# ---------------- the house (launcher icon geometry, normalised to 72 x 68) ----------------
+HOUSE = [(36, 0), (72, 32), (62, 32), (62, 68), (10, 68), (10, 32), (0, 32)]
+PLAY = [(29, 38), (29, 60), (47, 49)]
 
 
-def mark_polys(x: float, y: float, h: float):
-    s = h / MH
-    return [[(x + px * s, y + py * s) for px, py in pts] for pts in (HOUSE, PLAY)]
+def rounded(pts, r):
+    n = len(pts)
+    corners = []
+    for i in range(n):
+        p0, p1, p2 = pts[i - 1], pts[i], pts[(i + 1) % n]
+        def toward(a, b):
+            dx, dy = b[0] - a[0], b[1] - a[1]
+            L = math.hypot(dx, dy)
+            t = min(r, L / 2)
+            return (a[0] + dx / L * t, a[1] + dy / L * t)
+        corners.append((toward(p1, p0), p1, toward(p1, p2)))
+    d = f"M{num(corners[0][2][0])} {num(corners[0][2][1])}"
+    for i in range(1, n + 1):
+        a, c, b = corners[i % n]
+        d += f" L{num(a[0])} {num(a[1])} Q{num(c[0])} {num(c[1])} {num(b[0])} {num(b[1])}"
+    return d + " Z"
 
 
-def evenodd_mask(size, contour_groups, ss=SS):
-    """L mask of contours filled even-odd (each group XORed; groups OR-ed together)."""
-    W, H = size[0] * ss, size[1] * ss
-    total = Image.new("L", (W, H), 0)
-    for group in contour_groups:
-        acc = Image.new("1", (W, H), 0)
-        for poly in group:
-            layer = Image.new("1", (W, H), 0)
-            ImageDraw.Draw(layer).polygon([(px * ss, py * ss) for px, py in poly], fill=1)
-            acc = ImageChops.logical_xor(acc, layer)
-        total = ImageChops.lighter(total, acc.convert("L"))
-    return total.resize(size, Image.LANCZOS)
+def house_paths(cx, top, width):
+    s = width / 72
+    x0 = cx - width / 2
+    h = [(x0 + x * s, top + y * s) for x, y in HOUSE]
+    gx = sum(p[0] for p in PLAY) / 3
+    gy = sum(p[1] for p in PLAY) / 3
+    pl = [(x0 + (gx + (x - gx) * 1.12 + 0.8) * s, top + (gy + (y - gy) * 1.12) * s) for x, y in PLAY]
+    return rounded(h, 3.6 * s), rounded(pl, 2.4 * s)
 
 
-def glyph_mask(size, glyphs, ss=SS):
-    """Text mask with the font's own winding: contours turning like the glyph's largest one
-    add ink, the others cut holes (even-odd breaks on overlapping outlines, e.g. Inter's 'e')."""
-    W, H = size[0] * ss, size[1] * ss
-    m = Image.new("L", (W, H), 0)
-    d = ImageDraw.Draw(m)
-
-    def area(p):
-        return sum(p[i][0] * p[i - 1][1] - p[i - 1][0] * p[i][1] for i in range(len(p))) / 2
-
-    for contours in glyphs:
-        if not contours:
-            continue
-        sign = 1 if area(max(contours, key=lambda c: abs(area(c)))) > 0 else -1
-        scaled = [([(x * ss, y * ss) for x, y in c], area(c) * sign > 0) for c in contours]
-        for pts, outer in scaled:
-            if outer:
-                d.polygon(pts, fill=255)
-        for pts, outer in scaled:
-            if not outer:
-                d.polygon(pts, fill=0)
-    return m.resize(size, Image.LANCZOS)
+def tile_defs(uid, k):
+    return f"""<linearGradient id="tg{uid}" x1="0" y1="0" x2="0" y2="1">
+<stop offset="0" stop-color="#2A3546"/><stop offset="0.55" stop-color="#121821"/><stop offset="1" stop-color="#07090C"/></linearGradient>
+<linearGradient id="tb{uid}" x1="0" y1="0" x2="0" y2="1">
+<stop offset="0" stop-color="#FFFFFF" stop-opacity="0.28"/><stop offset="0.5" stop-color="#FFFFFF" stop-opacity="0.04"/><stop offset="1" stop-color="#FFFFFF" stop-opacity="0"/></linearGradient>
+<linearGradient id="hf{uid}" x1="0.2" y1="0" x2="0.6" y2="1">
+<stop offset="0" stop-color="#D2F6FF"/><stop offset="0.32" stop-color="#6AD2FB"/><stop offset="0.7" stop-color="#2E9DF0"/><stop offset="1" stop-color="#1A73D1"/></linearGradient>
+<linearGradient id="hs{uid}" x1="0" y1="0" x2="0" y2="1">
+<stop offset="0" stop-color="#1E6FBF"/><stop offset="1" stop-color="#0B3F73"/></linearGradient>
+<radialGradient id="gl{uid}" cx="0.32" cy="0.18" r="0.55">
+<stop offset="0" stop-color="#FFFFFF" stop-opacity="0.55"/><stop offset="1" stop-color="#FFFFFF" stop-opacity="0"/></radialGradient>
+<filter id="cs{uid}" x="-30%" y="-30%" width="160%" height="170%"><feGaussianBlur stdDeviation="{num(3.5 * k)}"/></filter>
+<filter id="gw{uid}" x="-50%" y="-50%" width="200%" height="200%"><feGaussianBlur stdDeviation="{num(9 * k)}"/></filter>"""
 
 
-def mark_mask(size, box):
-    """Mask of the mark fitted (aspect kept) and centred in box=(x0,y0,x1,y1)."""
-    x0, y0, x1, y1 = box
-    h = min((x1 - x0) / MW * MH, y1 - y0)
-    w = h / MH * MW
-    return evenodd_mask(size, [mark_polys(x0 + (x1 - x0 - w) / 2, y0 + (y1 - y0 - h) / 2, h)])
+def tile3d(uid, x, y, size, house_frac=0.64, radius=0.23):
+    """The app tile with the house standing off it."""
+    k = size / 100
+    house, play = house_paths(x + size / 2, y + size * (0.15 + (0.64 - house_frac) * 0.5), house_frac * 100 * k)
+    hid, pid = f"H{uid}", f"P{uid}"
+    p = [f'<rect x="{num(x)}" y="{num(y)}" width="{num(size)}" height="{num(size)}" rx="{num(radius * 100 * k)}" fill="url(#tg{uid})"/>']
+    if radius > 0:
+        p.append(f'<rect x="{num(x + 0.75 * k)}" y="{num(y + 0.75 * k)}" width="{num(size - 1.5 * k)}" height="{num(size - 1.5 * k)}" '
+                 f'rx="{num((radius * 100 - 0.7) * k)}" stroke="url(#tb{uid})" stroke-width="{num(1.5 * k)}"/>')
+    p += [f'<clipPath id="{hid}"><path d="{house}"/></clipPath>',
+          f'<clipPath id="{pid}"><path d="{play}"/></clipPath>',
+          f'<path d="{house}" fill="#2EA6FF" fill-opacity="0.45" transform="translate(0 {num(5 * k)})" filter="url(#gw{uid})"/>',
+          f'<path d="{house}" fill="#000" fill-opacity="0.9" transform="translate(0 {num(6.5 * k)})" filter="url(#cs{uid})"/>']
+    for i in range(8, 0, -1):
+        p.append(f'<path d="{house}" fill="url(#hs{uid})" transform="translate(0 {num(3.6 * k * i / 8)})"/>')
+    p += [f'<path d="{house}" fill="url(#hf{uid})"/>',
+          f'<g clip-path="url(#{hid})">',
+          f'<path d="{house}" stroke="#FFFFFF" stroke-opacity="0.75" stroke-width="{num(2.6 * k)}" transform="translate(0 {num(1.5 * k)})"/>',
+          f'<path d="{house}" stroke="#0A3A6B" stroke-opacity="0.55" stroke-width="{num(2.6 * k)}" transform="translate(0 {num(-1.5 * k)})"/>',
+          f'<rect x="{num(x)}" y="{num(y)}" width="{num(size)}" height="{num(size * 0.6)}" fill="url(#gl{uid})"/>',
+          "</g>",
+          f'<path d="{play}" fill="#0A1626"/>',
+          f'<g clip-path="url(#{pid})">',
+          f'<path d="{play}" stroke="#000" stroke-opacity="0.85" stroke-width="{num(2.4 * k)}" transform="translate(0 {num(1.3 * k)})"/>',
+          f'<path d="{play}" stroke="#8FDCFF" stroke-opacity="0.55" stroke-width="{num(1.6 * k)}" transform="translate(0 {num(-1.1 * k)})"/>',
+          "</g>"]
+    return "\n".join(p)
 
 
-def paint(base: Image.Image, mask: Image.Image, color) -> Image.Image:
-    layer = Image.new("RGBA", base.size, color)
-    out = base.convert("RGBA")
-    out.paste(layer, (0, 0), mask)
-    return out
+def tile_svg(n, house_frac=0.64, radius=0.23, margin=0.0):
+    size = 100 * (1 - 2 * margin)
+    o = 100 * margin
+    return (f'<svg width="{n}" height="{n}" viewBox="0 0 100 100" fill="none" xmlns="http://www.w3.org/2000/svg">\n'
+            f'<defs>\n{tile_defs("i", size / 100)}\n</defs>\n{tile3d("i", o, o, size, house_frac, radius)}\n</svg>\n')
 
 
-def save(img: Image.Image, rel: str, **kw):
+# ---------------- output helpers ----------------
+def write_text(rel, text):
     path = os.path.join(OUT, rel)
-    os.makedirs(os.path.dirname(path), exist_ok=True)
-    img.save(path, **kw)
-    print("wrote", rel, img.size)
-
-
-# ---------- logos (SVG) ----------
-def svg(w, h, body):
-    return (f'<svg width="{num(w)}" height="{num(h)}" viewBox="0 0 {num(w)} {num(h)}" fill="none" '
-            f'xmlns="http://www.w3.org/2000/svg">\n{body}\n</svg>\n')
-
-
-# Full (sidebar): mark left, word right, caps exactly as tall as the house walls.
-FH, PAD = 96.0, 2.0
-f_mh = 84.0
-f_s = f_mh / MH
-f_my = (FH - f_mh) / 2
-f_cap = (MH - WALL_TOP) * f_s
-f_base = f_my + f_mh
-f_tx = PAD + MW * f_s + 20
-FW = f_tx + word_width(f_cap) + PAD
-full = svg(FW, FH,
-           f'<path fill-rule="evenodd" clip-rule="evenodd" d="{mark_path(PAD, f_my, f_mh)}" fill="{ACCENT}"/>\n'
-           f'<path d="{word_svg(f_tx, f_base, f_cap)}" fill="{TEXT}"/>')
-
-# Stacked (login, setup, password reset): mark above, word centred below.
-s_mh, s_cap, s_gap = 100.0, 44.0, 18.0
-s_ww = word_width(s_cap)
-SW = max(s_ww, MW * s_mh / MH) + 2 * PAD
-SH = PAD + s_mh + s_gap + s_cap + PAD
-stacked = svg(SW, SH,
-              f'<path fill-rule="evenodd" clip-rule="evenodd" d="{mark_path((SW - MW * s_mh / MH) / 2, PAD, s_mh)}" fill="{ACCENT}"/>\n'
-              f'<path d="{word_svg((SW - s_ww) / 2, PAD + s_mh + s_gap + s_cap, s_cap)}" fill="{TEXT}"/>')
-
-for rel, text in (("logo_full.svg", full), ("logo_stacked.svg", stacked)):
-    os.makedirs(OUT, exist_ok=True)
-    with open(os.path.join(OUT, rel), "w", encoding="utf-8", newline="\n") as fh:
+    os.makedirs(os.path.dirname(path) or OUT, exist_ok=True)
+    with open(path, "w", encoding="utf-8", newline="\n") as fh:
         fh.write(text)
     print("wrote", rel)
 
 
-def logo_raster(w, h, scale, mark_xyh, word_xbc, bg=None):
-    size = (round(w * scale), round(h * scale))
-    base = Image.new("RGBA", size, bg or (0, 0, 0, 0))
-    mx, my, mh = mark_xyh
-    base = paint(base, evenodd_mask(size, [mark_polys(mx * scale, my * scale, mh * scale)]), ACCENT)
-    tx, tb, tc = word_xbc
-    return paint(base, glyph_mask(size, word_polys(tx * scale, tb * scale, tc * scale)), TEXT)
+def render(svg, w, h):
+    return Image.open(io.BytesIO(bytes(resvg_py.svg_to_bytes(svg_string=svg, width=w, height=h)))).convert("RGBA")
 
 
-# logo_full.png: same artwork as the SVG, at the original 322x96 box (fitted, centred).
-full_png = logo_raster(FW, FH, 1, (PAD, f_my, f_mh), (f_tx, f_base, f_cap))
-fit = min(322 / full_png.width, 96 / full_png.height)
-full_png = logo_raster(FW, FH, fit, (PAD, f_my, f_mh), (f_tx, f_base, f_cap))
-canvas = Image.new("RGBA", (322, 96), (0, 0, 0, 0))
-canvas.paste(full_png, ((322 - full_png.width) // 2, (96 - full_png.height) // 2))
-save(canvas, "logo_full.png")
+def save(img, rel, **kw):
+    path = os.path.join(OUT, rel)
+    os.makedirs(os.path.dirname(path) or OUT, exist_ok=True)
+    img.save(path, **kw)
+    print("wrote", rel, img.size)
 
-# ---------- icons ----------
+
+os.makedirs(OUT, exist_ok=True)
+
+# logos
+write_text("logo_stacked.svg", wordmark_svg("s", 448, 192, wordmark("m")[2]))   # TV size, 1 dp = 1 px
+write_text("logo_full.svg", wordmark_svg("f", 256, 96, 212))
+save(render(wordmark_svg("p", 322, 96, 215), 322, 96), "logo_full.png")
+
+# icons: rounded tile on transparent; full-bleed square where the platform rounds it itself
 for n in (16, 32):
-    save(paint(Image.new("RGBA", (n, n), (0, 0, 0, 0)), mark_mask((n, n), (0, 0.5, n, n - 0.5)), ACCENT),
-         f"favicon-{n}x{n}.png")
-
-ico = paint(Image.new("RGBA", (256, 256), (0, 0, 0, 0)), mark_mask((256, 256), (0, 4, 256, 252)), ACCENT)
-save(ico, "favicon.ico", sizes=[(16, 16), (32, 32), (48, 48)])
-
-
-def app_icon(n, frac, rounded):
-    base = Image.new("RGBA", (n, n), (0, 0, 0, 0))
-    bg = Image.new("L", (n * SS, n * SS), 0)
-    if rounded:
-        ImageDraw.Draw(bg).rounded_rectangle((0, 0, n * SS - 1, n * SS - 1), radius=int(n * SS * 0.22), fill=255)
-    else:
-        bg.paste(255, (0, 0, n * SS, n * SS))
-    base = paint(base, bg.resize((n, n), Image.LANCZOS), DARK)
-    m = n * frac
-    return paint(base, mark_mask((n, n), ((n - m) / 2, (n - m) / 2, (n + m) / 2, (n + m) / 2)), ACCENT)
-
-
-save(app_icon(180, 0.62, False).convert("RGB"), "apple-touch-icon.png")
+    big = render(tile_svg(256, radius=0.22), 256, 256)
+    save(big.resize((n, n), Image.LANCZOS), f"favicon-{n}x{n}.png")
+save(render(tile_svg(256, radius=0.22), 256, 256), "favicon.ico", sizes=[(16, 16), (32, 32), (48, 48)])
+save(render(tile_svg(180, radius=0), 180, 180).convert("RGB"), "apple-touch-icon.png")
 for n in (192, 512):
-    save(app_icon(n, 0.62, True), f"android-chrome-{n}x{n}.png")
-    save(app_icon(n, 0.50, False), f"android-chrome-{n}x{n}_maskable.png")
+    save(render(tile_svg(n, radius=0.22), n, n), f"android-chrome-{n}x{n}.png")
+    save(render(tile_svg(n, house_frac=0.5, radius=0), n, n), f"android-chrome-{n}x{n}_maskable.png")
 
 
-# ---------- splash screens and missing-poster art: house where the circle was ----------
-def logo_box(img: Image.Image, bg, tol=40):
+# splash screens: wordmark centred on the image's own background
+def bg_of(img):
+    return img.convert("RGB").getpixel((2, 2))
+
+
+for f in sorted(os.listdir(PUBLIC)):
+    if not (f.startswith("apple-splash-") and f.endswith(".jpg")):
+        continue
+    src = Image.open(os.path.join(PUBLIC, f))
+    w, h = src.size
+    r, g, b = bg_of(src)
+    art = min(w, h) * 0.56
+    svg = wordmark_svg("sp", w, h, art).replace('fill="none" xmlns', f'fill="none" style="background:rgb({r},{g},{b})" xmlns')
+    out = Image.new("RGBA", (w, h), (r, g, b, 255))
+    out.alpha_composite(render(svg, w, h))
+    save(out.convert("RGB"), f, quality=92)
+
+
+# missing-poster images: flat muted house where the old logo sat
+def logo_box(img, bg, tol=40):
     rgb = img.convert("RGB")
     diff = ImageChops.difference(rgb, Image.new("RGB", rgb.size, bg)).convert("L")
     return diff.point(lambda v: 255 if v > tol else 0).getbbox()
 
 
-def logo_color(img: Image.Image, box, bg):
-    crop = img.convert("RGB").crop(box)
-    colors = crop.getcolors(1 << 20) or []
-    far = [(c, rgb) for c, rgb in colors if sum(abs(a - b) for a, b in zip(rgb, bg)) > 60]
-    return max(far)[1] if far else ACCENT
-
-
-def replace_logo(rel, use_accent):
+for f in ("seerr_poster_not_found.png", "seerr_poster_not_found_logo_center.png", "seerr_poster_not_found_logo_top.png"):
+    rel = "images/" + f
     src = Image.open(os.path.join(PUBLIC, rel))
-    bg = src.convert("RGB").getpixel((0, 0))
+    w, h = src.size
+    bg = bg_of(src)
     box = logo_box(src, bg)
     if not box:
-        print("no logo found, kept", rel)
-        return None
-    color = ACCENT if use_accent else logo_color(src, box, bg)
-    out = paint(Image.new("RGB", src.size, bg), mark_mask(src.size, box), color)
-    if rel.endswith(".jpg"):
-        save(out.convert("RGB"), rel, quality=92)
-    elif src.mode == "P":
-        save(out.convert("RGB").quantize(colors=64), rel, optimize=True)
-    else:
-        save(out.convert(src.mode), rel, optimize=True)
-    return out
-
-
-for f in sorted(os.listdir(PUBLIC)):
-    if f.startswith("apple-splash-") and f.endswith(".jpg"):
-        replace_logo(f, True)
-for f in ("seerr_poster_not_found.png", "seerr_poster_not_found_logo_center.png", "seerr_poster_not_found_logo_top.png"):
-    replace_logo("images/" + f, False)
-
-# ---------- previews ----------
-pv = os.path.join(OUT, "_preview")
-os.makedirs(pv, exist_ok=True)
-sheet = Image.new("RGBA", (900, 560), (17, 24, 39, 255))           # Seerr gray-900
-side = Image.new("RGBA", (300, 140), (31, 41, 55, 255))             # sidebar gray-800
-lf = logo_raster(FW, FH, min(256 / FW, 96 / FH), (PAD, f_my, f_mh), (f_tx, f_base, f_cap))
-side.alpha_composite(lf, ((300 - lf.width) // 2, (140 - lf.height) // 2))
-sheet.alpha_composite(side, (20, 20))
-ls = logo_raster(SW, SH, min(448 / SW, 192 / SH), ((SW - MW * s_mh / MH) / 2, PAD, s_mh),
-                 ((SW - s_ww) / 2, PAD + s_mh + s_gap + s_cap, s_cap))
-sheet.alpha_composite(ls, (360 + (500 - ls.width) // 2, 20))
-x = 20
-for rel in ("favicon-32x32.png", "apple-touch-icon.png", "android-chrome-192x192.png", "android-chrome-192x192_maskable.png"):
-    im = Image.open(os.path.join(OUT, rel)).convert("RGBA")
-    sheet.alpha_composite(im, (x, 300))
-    x += im.width + 30
-poster = Image.open(os.path.join(OUT, "images/seerr_poster_not_found_logo_top.png")).convert("RGBA").resize((140, 210))
-sheet.alpha_composite(poster, (740, 300))
-sheet.save(os.path.join(pv, "sheet.png"))
-Image.open(os.path.join(OUT, "apple-splash-1170-2532.jpg")).resize((390, 844)).save(os.path.join(pv, "splash.png"))
-print("logo_full", num(FW), "x", num(FH), "| logo_stacked", num(SW), "x", num(SH))
+        print("kept", rel)
+        continue
+    crop = src.convert("RGB").crop(box)
+    colors = sorted(crop.getcolors(1 << 20) or [], reverse=True)
+    far = [c for _, c in colors if sum(abs(a - b) for a, b in zip(c, bg)) > 60]
+    col = "#%02X%02X%02X" % (far[0] if far else (75, 85, 99))
+    x0, y0, x1, y1 = box
+    hw = min(x1 - x0, (y1 - y0) / 68 * 72)
+    house, play = house_paths((x0 + x1) / 2, (y0 + y1) / 2 - hw / 72 * 34, hw)
+    svg = (f'<svg width="{w}" height="{h}" viewBox="0 0 {w} {h}" xmlns="http://www.w3.org/2000/svg">'
+           f'<rect width="{w}" height="{h}" fill="rgb{bg}"/>'
+           f'<path fill-rule="evenodd" d="{house} {play}" fill="{col}"/></svg>')
+    save(render(svg, w, h).convert("RGB").quantize(colors=64), rel, optimize=True)

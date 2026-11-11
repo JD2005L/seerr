@@ -64,16 +64,20 @@ build), and the `watchtower` container (it only watched Seerr).
 - **Quality profile.** A regular user's chosen profile is kept instead of
   being replaced by their override rule (`server/entity/MediaRequest.ts`).
 - API spec entries for the new endpoints (`seerr-api.yml`).
-- **Levac TV branding.** Every image that showed the Seerr logo shows the
-  Levac TV house instead (the mark from Levac TV's launcher icon, `#4FC3F7`):
-  `logo_full.svg` (sidebar) and `logo_stacked.svg` (login, setup, password
-  reset) pair it with "Levac TV" in Inter Bold, drawn as outlines; the
-  favicons, home-screen icons, iOS splash screens and missing-poster images
-  carry the house alone, in the old logo's place, size and colour. All of it
-  comes from `fork/branding/brand.py` (how to run it is at its top). If an
-  upstream merge conflicts on one of these files, keep ours, then re-run the
-  script in case upstream added a new size. The background poster rotation
-  is upstream's and untouched.
+- **Levac TV branding.** `logo_stacked.svg` (login, setup, password reset)
+  and `logo_full.svg` (sidebar) are the wordmark from the Levac TV app's
+  "Who's watching?" screen (LevacTV `ProfilesScreen.kt`, `Wordmark()`):
+  "LEVAC" in the app's Inter at Black with wide spacing and a silver
+  gradient, then a glowing Sky (`#4FC3F7`) "TV" badge, drawn as outlines from
+  the app's own font file. Favicons and home-screen icons are the app's
+  launcher house on its dark tile, drawn with depth; the iOS splash screens
+  carry the wordmark; the missing-poster images a flat muted house. All of it
+  comes from `fork/branding/brand.py` (how to run it is at its top). If the
+  app's wordmark changes, change the numbers there to match. If an upstream
+  merge conflicts on one of these files, keep ours, then re-run the script in
+  case upstream added a new size. The background poster rotation is
+  upstream's and untouched. These files reach the image because `build.sh`
+  bundles `public/` and the Dockerfile copies it over upstream's.
 
 ## Notify PVIBot
 
