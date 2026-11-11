@@ -13,7 +13,11 @@ import { MediaType } from '@server/constants/media';
 import { getRepository } from '@server/datasource';
 import Media from '@server/entity/Media';
 import { User } from '@server/entity/User';
-import { canManageFanout, currentOwner, normalizeOwner } from '@server/lib/fanout';
+import {
+  canManageFanout,
+  currentOwner,
+  normalizeOwner,
+} from '@server/lib/fanout';
 import { getSettings } from '@server/lib/settings';
 import logger from '@server/logger';
 import { In } from 'typeorm';
@@ -95,7 +99,8 @@ export function accessFor(
   if (user && (user.id === 1 || canManageFanout(user))) return null;
   const sections = new Set<string>();
   const self = currentOwner(user);
-  for (const s of index.sections) if (self && s.owner === self) sections.add(s.key);
+  for (const s of index.sections)
+    if (self && s.owner === self) sections.add(s.key);
   const granted = user?.plexId ? shared?.get(user.plexId) : undefined;
   if (granted === 'all') for (const s of index.sections) sections.add(s.key);
   else if (granted) for (const key of granted) sections.add(key);
@@ -105,10 +110,15 @@ export function accessFor(
   return { sections, owners };
 }
 
-function titleKeys(e: { type: MediaType; tmdbId?: number | null; tvdbId?: number | null }) {
+function titleKeys(e: {
+  type: MediaType;
+  tmdbId?: number | null;
+  tvdbId?: number | null;
+}) {
   const keys: string[] = [];
   if (e.tmdbId) keys.push(`${e.type}:tmdb:${e.tmdbId}`);
-  if (e.type === MediaType.TV && e.tvdbId) keys.push(`${e.type}:tvdb:${e.tvdbId}`);
+  if (e.type === MediaType.TV && e.tvdbId)
+    keys.push(`${e.type}:tvdb:${e.tvdbId}`);
   return keys;
 }
 
@@ -124,7 +134,11 @@ export function rankRecentlyAdded(
 ): Media[] {
   const byKey = new Map<string, Media>();
   for (const m of media)
-    for (const k of titleKeys({ type: m.mediaType, tmdbId: m.tmdbId, tvdbId: m.tvdbId }))
+    for (const k of titleKeys({
+      type: m.mediaType,
+      tmdbId: m.tmdbId,
+      tvdbId: m.tvdbId,
+    }))
       byKey.set(k, m);
   const newest = new Map<number, { media: Media; addedAt: number }>();
   for (const e of index.entries) {
@@ -134,7 +148,8 @@ export function rankRecentlyAdded(
       .find(Boolean);
     if (!m) continue;
     const seen = newest.get(m.id);
-    if (!seen || e.addedAt > seen.addedAt) newest.set(m.id, { media: m, addedAt: e.addedAt });
+    if (!seen || e.addedAt > seen.addedAt)
+      newest.set(m.id, { media: m, addedAt: e.addedAt });
   }
   return [...newest.values()]
     .sort((a, b) => b.addedAt - a.addedAt || b.media.id - a.media.id)
@@ -175,12 +190,17 @@ async function loadIndex(): Promise<LibraryIndex> {
   const entries: LibraryEntry[] = [];
   for (const lib of await plex.getLibraries()) {
     if (lib.type !== 'movie' && lib.type !== 'show') continue;
-    const owner = (lib.Location ?? []).map((l) => ownerFromPath(l.path)).find(Boolean);
+    const owner = (lib.Location ?? [])
+      .map((l) => ownerFromPath(l.path))
+      .find(Boolean);
     if (!owner) continue;
     sections.push({ key: String(lib.key), owner });
     const type = lib.type === 'movie' ? MediaType.MOVIE : MediaType.TV;
     for (let offset = 0; ; offset += 500) {
-      const page = await plex.getLibraryContents(String(lib.key), { offset, size: 500 });
+      const page = await plex.getLibraryContents(String(lib.key), {
+        offset,
+        size: 500,
+      });
       for (const item of page.items) {
         entries.push({
           section: String(lib.key),
@@ -246,7 +266,8 @@ async function cached<T>(
       .finally(() => setLoading(null));
     setLoading(pending);
   }
-  const usable = current && now - current.at < STALE_SECONDS ? current.value : null;
+  const usable =
+    current && now - current.at < STALE_SECONDS ? current.value : null;
   if (usable) {
     // Serve the last copy while it refreshes; a failed refresh is logged and retried next time.
     pending.catch((e) =>
@@ -294,7 +315,9 @@ async function sharedSections(): Promise<SharedSections | null> {
  * null = no limit. Without the libraries a person only sees their own requests
  * and no recently added titles, rather than everyone's.
  */
-export async function libraryAccess(user: User | undefined): Promise<LibraryAccess | null> {
+export async function libraryAccess(
+  user: User | undefined
+): Promise<LibraryAccess | null> {
   if (user && (user.id === 1 || canManageFanout(user))) return null;
   const [index, shared] = await Promise.all([libraryIndex(), sharedSections()]);
   return accessFor(user, index ?? { sections: [], entries: [] }, shared);
@@ -309,9 +332,27 @@ export async function recentlyAddedFor(
   const index = await libraryIndex();
   if (!index || !access.sections.size) return { total: 0, results: [] };
   const wanted = index.entries.filter((e) => access.sections.has(e.section));
-  const movieIds = [...new Set(wanted.filter((e) => e.type === MediaType.MOVIE && e.tmdbId).map((e) => e.tmdbId as number))];
-  const tvTmdb = [...new Set(wanted.filter((e) => e.type === MediaType.TV && e.tmdbId).map((e) => e.tmdbId as number))];
-  const tvTvdb = [...new Set(wanted.filter((e) => e.type === MediaType.TV && e.tvdbId).map((e) => e.tvdbId as number))];
+  const movieIds = [
+    ...new Set(
+      wanted
+        .filter((e) => e.type === MediaType.MOVIE && e.tmdbId)
+        .map((e) => e.tmdbId as number)
+    ),
+  ];
+  const tvTmdb = [
+    ...new Set(
+      wanted
+        .filter((e) => e.type === MediaType.TV && e.tmdbId)
+        .map((e) => e.tmdbId as number)
+    ),
+  ];
+  const tvTvdb = [
+    ...new Set(
+      wanted
+        .filter((e) => e.type === MediaType.TV && e.tvdbId)
+        .map((e) => e.tvdbId as number)
+    ),
+  ];
   const repo = getRepository(Media);
   const media: Media[] = [];
   const chunk = <T>(list: T[]) => {
@@ -320,11 +361,23 @@ export async function recentlyAddedFor(
     return out;
   };
   for (const ids of chunk(movieIds))
-    media.push(...(await repo.find({ where: { mediaType: MediaType.MOVIE, tmdbId: In(ids) } })));
+    media.push(
+      ...(await repo.find({
+        where: { mediaType: MediaType.MOVIE, tmdbId: In(ids) },
+      }))
+    );
   for (const ids of chunk(tvTmdb))
-    media.push(...(await repo.find({ where: { mediaType: MediaType.TV, tmdbId: In(ids) } })));
+    media.push(
+      ...(await repo.find({
+        where: { mediaType: MediaType.TV, tmdbId: In(ids) },
+      }))
+    );
   for (const ids of chunk(tvTvdb))
-    media.push(...(await repo.find({ where: { mediaType: MediaType.TV, tvdbId: In(ids) } })));
+    media.push(
+      ...(await repo.find({
+        where: { mediaType: MediaType.TV, tvdbId: In(ids) },
+      }))
+    );
   const ranked = rankRecentlyAdded(index, access, media);
   return { total: ranked.length, results: ranked.slice(skip, skip + take) };
 }

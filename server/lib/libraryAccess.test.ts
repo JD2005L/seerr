@@ -60,7 +60,10 @@ const index: LibraryIndex = {
 
 describe('library access rules', () => {
   it('reads the owner from Plex folders and Seerr root folders alike', () => {
-    assert.equal(ownerFromPath('/mnt/media/Library/Kulpreet/Movies'), 'kulpreet');
+    assert.equal(
+      ownerFromPath('/mnt/media/Library/Kulpreet/Movies'),
+      'kulpreet'
+    );
     assert.equal(ownerFromPath('/library/william/TV Shows'), 'william');
     assert.equal(ownerFromPath('/mnt/media/Library/Disney'), 'disney');
     assert.equal(ownerFromPath('C:\\media\\Library\\Amanda\\Movies'), 'amanda');
@@ -85,25 +88,44 @@ describe('library access rules', () => {
   });
 
   it('lets the server owner and request managers see everything', () => {
-    assert.equal(accessFor(user({ id: 1, username: 'james' }), index, null), null);
     assert.equal(
-      accessFor(user({ id: 9, permissions: Permission.MANAGE_REQUESTS }), index, null),
+      accessFor(user({ id: 1, username: 'james' }), index, null),
+      null
+    );
+    assert.equal(
+      accessFor(
+        user({ id: 9, permissions: Permission.MANAGE_REQUESTS }),
+        index,
+        null
+      ),
       null
     );
   });
 
   it('gives everyone else their own library plus what Plex shares with them', () => {
     const shared = new Map([[555, new Set(['2'])]]);
-    const kp = accessFor(user({ id: 11, username: 'kulpreet', plexId: 555 }), index, shared);
+    const kp = accessFor(
+      user({ id: 11, username: 'kulpreet', plexId: 555 }),
+      index,
+      shared
+    );
     assert.deepEqual([...(kp?.sections ?? [])].sort(), ['1', '2']);
     assert.deepEqual([...(kp?.owners ?? [])].sort(), ['james', 'kulpreet']);
     const local = accessFor(user({ id: 8, username: 'kids' }), index, shared);
     assert.deepEqual([...(local?.sections ?? [])], []);
     assert.deepEqual([...(local?.owners ?? [])], ['kids']);
-    const all = accessFor(user({ id: 12, username: 'tim', plexId: 7 }), index, new Map([[7, 'all']]));
+    const all = accessFor(
+      user({ id: 12, username: 'tim', plexId: 7 }),
+      index,
+      new Map([[7, 'all']])
+    );
     assert.equal(all?.sections.size, 4);
     // Plex unreachable and nothing cached: their own library only.
-    const offline = accessFor(user({ id: 11, username: 'kulpreet', plexId: 555 }), index, null);
+    const offline = accessFor(
+      user({ id: 11, username: 'kulpreet', plexId: 555 }),
+      index,
+      null
+    );
     assert.deepEqual([...(offline?.sections ?? [])], ['1']);
   });
 
@@ -113,11 +135,23 @@ describe('library access rules', () => {
       media(2, MediaType.MOVIE, 11),
       media(3, MediaType.TV, 500, 77),
     ];
-    const access = { sections: new Set(['1', '2']), owners: new Set(['kulpreet', 'james']) };
+    const access = {
+      sections: new Set(['1', '2']),
+      owners: new Set(['kulpreet', 'james']),
+    };
     // 11 is only in Alison's library; 99 has no Seerr row; 10 counts from its copy at 300.
-    assert.deepEqual(rankRecentlyAdded(index, access, rows).map((m) => m.id), [1, 3]);
-    const alison = { sections: new Set(['3', '4']), owners: new Set(['alison']) };
-    assert.deepEqual(rankRecentlyAdded(index, alison, rows).map((m) => m.id), [2, 3]);
+    assert.deepEqual(
+      rankRecentlyAdded(index, access, rows).map((m) => m.id),
+      [1, 3]
+    );
+    const alison = {
+      sections: new Set(['3', '4']),
+      owners: new Set(['alison']),
+    };
+    assert.deepEqual(
+      rankRecentlyAdded(index, alison, rows).map((m) => m.id),
+      [2, 3]
+    );
   });
 
   it('matches request root folders exactly or below the owner folder only', () => {
@@ -134,7 +168,13 @@ describe('Discover limited to the libraries a person has', () => {
   before(() => {
     app = express();
     app.use(express.json());
-    app.use(session({ secret: 'test-secret', resave: false, saveUninitialized: false }));
+    app.use(
+      session({
+        secret: 'test-secret',
+        resave: false,
+        saveUninitialized: false,
+      })
+    );
     app.use(checkUser);
     app.use('/auth', authRoutes);
     app.use('/request', requestRoutes);
@@ -155,7 +195,11 @@ describe('Discover limited to the libraries a person has', () => {
     settings.main.localLogin = true;
     try {
       const agent = request.agent(app);
-      assert.equal((await agent.post('/auth/local').send({ email, password: 'test1234' })).status, 200);
+      assert.equal(
+        (await agent.post('/auth/local').send({ email, password: 'test1234' }))
+          .status,
+        200
+      );
       return agent;
     } finally {
       settings.main.localLogin = prior;
@@ -164,20 +208,47 @@ describe('Discover limited to the libraries a person has', () => {
 
   async function seed() {
     const users = getRepository(User);
-    const admin = await users.findOneOrFail({ where: { email: 'admin@seerr.dev' } });
-    const demo = await users.findOneOrFail({ where: { email: 'demo@seerr.dev' } });
-    demo.permissions = Permission.REQUEST | Permission.REQUEST_VIEW | Permission.RECENT_VIEW;
+    const admin = await users.findOneOrFail({
+      where: { email: 'admin@seerr.dev' },
+    });
+    const demo = await users.findOneOrFail({
+      where: { email: 'demo@seerr.dev' },
+    });
+    demo.permissions =
+      Permission.REQUEST | Permission.REQUEST_VIEW | Permission.RECENT_VIEW;
     await users.save(demo);
     const mediaRepo = getRepository(Media);
     const at = new Date('2026-11-01T00:00:00Z');
     const [inShared, inOther, inOwn] = await mediaRepo.save([
-      new Media({ mediaType: MediaType.MOVIE, tmdbId: 9101, status: MediaStatus.AVAILABLE, mediaAddedAt: at }),
-      new Media({ mediaType: MediaType.MOVIE, tmdbId: 9102, status: MediaStatus.AVAILABLE, mediaAddedAt: at }),
-      new Media({ mediaType: MediaType.MOVIE, tmdbId: 9103, status: MediaStatus.AVAILABLE, mediaAddedAt: at }),
+      new Media({
+        mediaType: MediaType.MOVIE,
+        tmdbId: 9101,
+        status: MediaStatus.AVAILABLE,
+        mediaAddedAt: at,
+      }),
+      new Media({
+        mediaType: MediaType.MOVIE,
+        tmdbId: 9102,
+        status: MediaStatus.AVAILABLE,
+        mediaAddedAt: at,
+      }),
+      new Media({
+        mediaType: MediaType.MOVIE,
+        tmdbId: 9103,
+        status: MediaStatus.AVAILABLE,
+        mediaAddedAt: at,
+      }),
     ]);
     const requests = getRepository(MediaRequest);
     const make = (m: Media, by: User, rootFolder: string) =>
-      new MediaRequest({ type: MediaType.MOVIE, status: MediaRequestStatus.PENDING, media: m, requestedBy: by, is4k: false, rootFolder });
+      new MediaRequest({
+        type: MediaType.MOVIE,
+        status: MediaRequestStatus.PENDING,
+        media: m,
+        requestedBy: by,
+        is4k: false,
+        rootFolder,
+      });
     const [shared, other, own] = await requests.save([
       make(inShared, admin, '/library/Alpha/Movies'),
       make(inOther, admin, '/library/beta/Movies'),
@@ -203,16 +274,23 @@ describe('Discover limited to the libraries a person has', () => {
   it('shows a regular user only what is in their libraries as recently added', async () => {
     const s = await seed();
     const demo = await loginAs('demo@seerr.dev');
-    const res = await demo.get('/media?filter=allavailable&take=20&sort=mediaAdded');
+    const res = await demo.get(
+      '/media?filter=allavailable&take=20&sort=mediaAdded'
+    );
     assert.equal(res.status, 200);
-    assert.deepEqual(res.body.results.map((m: Media) => m.id), [s.inOwn.id, s.inShared.id]);
+    assert.deepEqual(
+      res.body.results.map((m: Media) => m.id),
+      [s.inOwn.id, s.inShared.id]
+    );
     assert.equal(res.body.pageInfo.results, 2);
   });
 
   it('keeps the full list for the admin', async () => {
     const s = await seed();
     const admin = await loginAs('admin@seerr.dev');
-    const res = await admin.get('/media?filter=allavailable&take=20&sort=mediaAdded');
+    const res = await admin.get(
+      '/media?filter=allavailable&take=20&sort=mediaAdded'
+    );
     assert.deepEqual(
       res.body.results.map((m: Media) => m.id).sort(),
       [s.inShared.id, s.inOther.id, s.inOwn.id].sort()
@@ -229,7 +307,10 @@ describe('Discover limited to the libraries a person has', () => {
       [s.shared.id, s.own.id].sort()
     );
     const admin = await loginAs('admin@seerr.dev');
-    assert.equal((await admin.get('/request?filter=all&take=10')).body.results.length, 3);
+    assert.equal(
+      (await admin.get('/request?filter=all&take=10')).body.results.length,
+      3
+    );
   });
 
   it('falls back to their own requests and nothing recently added when Plex is unreachable', async () => {
@@ -241,9 +322,14 @@ describe('Discover limited to the libraries a person has', () => {
       throw new Error('plex.tv down');
     };
     const demo = await loginAs('demo@seerr.dev');
-    const recent = await demo.get('/media?filter=allavailable&take=20&sort=mediaAdded');
+    const recent = await demo.get(
+      '/media?filter=allavailable&take=20&sort=mediaAdded'
+    );
     assert.deepEqual(recent.body.results, []);
     const reqs = await demo.get('/request?filter=all&take=10');
-    assert.deepEqual(reqs.body.results.map((r: MediaRequest) => r.id), [s.own.id]);
+    assert.deepEqual(
+      reqs.body.results.map((r: MediaRequest) => r.id),
+      [s.own.id]
+    );
   });
 });
