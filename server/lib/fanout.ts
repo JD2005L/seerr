@@ -456,9 +456,16 @@ const NOTIFY_CONFIG_PATH = process.env.CONFIG_DIRECTORY
   ? `${process.env.CONFIG_DIRECTORY}/levac-notify.json`
   : path.join(__dirname, '../../config/levac-notify.json');
 
-type NotifyConfig = { url: string; key: string; hermesSecret: string };
+// eventsUrl: the n8n relay for PVIBot events other than Notify PVIBot
+// (server/lib/levacEvents.ts); optional.
+type NotifyConfig = {
+  url: string;
+  key: string;
+  hermesSecret: string;
+  eventsUrl?: string;
+};
 
-function notifyConfig(): NotifyConfig | null {
+export function notifyConfig(): NotifyConfig | null {
   try {
     const config = JSON.parse(readFileSync(NOTIFY_CONFIG_PATH, 'utf8'));
     return config?.url && config?.key && config?.hermesSecret ? config : null;
